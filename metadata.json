@@ -1,0 +1,6 @@
+{
+  "name": "SIAP BOS",
+  "description": "Sistem Informasi Administrasi Pengelolaan BOS (SIAP BOS) untuk mengelola data sekolah penerima bantuan operasional sekolah secara terpusat.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

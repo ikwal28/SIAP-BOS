@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>My Google AI Studio App</title>
+    <!-- PDF.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+      if (window.pdfjsLib) {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      }
+      
+      // Gracefully suppress benign Vite WebSocket and offline proxy HMR warning popups in development 
+      window.addEventListener('unhandledrejection', function(event) {
+        const reason = event.reason;
+        if (reason) {
+          const msg = String(reason.message || reason);
+          if (msg.includes('WebSocket') || msg.includes('websocket') || msg.includes('connection')) {
+            event.preventDefault();
+            console.log('Benign WebSocket event caught & suppressed.');
+          }
+        }
+      });
+      window.addEventListener('error', function(event) {
+        const msg = String(event.message || '');
+        if (msg.includes('WebSocket') || msg.includes('websocket') || msg.includes('connection')) {
+          event.preventDefault();
+        }
+      }, true);
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

@@ -1,0 +1,1234 @@
+/**
+ * SIAP BOS - Backend Code.gs
+ * Copy this code to your Google Apps Script editor.
+ */
+
+const FOLDER_NAME = "SIAP BOS";
+
+function doGet(e) {
+  return handleRequest(e);
+}
+
+function doPost(e) {
+  return handleRequest(e);
+}
+
+function handleRequest(e) {
+  // Broadly handle CORS for any request to ensure headers are always present
+  const output = ContentService.createTextOutput("");
+  output.setMimeType(ContentService.MimeType.JSON);
+  
+  // Handle CORS Preflight
+  if (e.parameter.action === 'OPTIONS') {
+    return output.setContent(JSON.stringify({ success: true, message: "CORS preflight ok" }));
+  }
+
+  const action = e.parameter.action || '';
+  let response = { success: false, message: "Action not found" };
+
+  try {
+    let postData = {};
+    if (e.postData && e.postData.contents) {
+      try {
+        postData = JSON.parse(e.postData.contents);
+      } catch (parseErr) {
+        postData = {};
+      }
+    }
+
+    switch (action) {
+      case "login":
+        response = login(postData);
+        break;
+      case "tambahSekolah":
+        response = tambahSekolah(postData);
+        break;
+      case "getDataSekolah":
+        response = getDataSekolah(postData);
+        break;
+      case "setup":
+        response = setupSystem();
+        break;
+      case "hapusSekolah":
+        response = hapusSekolah(postData);
+        break;
+      case "perpanjangAkses":
+        response = perpanjangAkses(postData);
+        break;
+      case "generateReport":
+        response = generateReport(postData);
+        break;
+      case "getGeneratedReports":
+        response = getGeneratedReports(postData);
+        break;
+      case "generateDatabase":
+        response = generateDatabase(postData);
+        break;
+      case "deleteDatabase":
+        response = deleteDatabase(postData);
+        break;
+      case "getGeneratedDatabases":
+        response = getGeneratedDatabases(postData);
+        break;
+      case "importData":
+        response = importData(postData);
+        break;
+      case "generatePDFDoc":
+        response = generatePDFDoc(postData);
+        break;
+      case "getGeneratedPDFDocs":
+        response = getGeneratedPDFDocs(postData);
+        break;
+      case "getImportedData":
+        response = getImportedData(postData);
+        break;
+      case "checkBkuMonths":
+        response = checkBkuMonths(postData);
+        break;
+      case "saveKwitansi":
+        response = saveKwitansi(postData);
+        break;
+      case "getKwitansis":
+        response = getKwitansis(postData);
+        break;
+      case "editSekolah":
+        response = editSekolah(postData);
+        break;
+      default:
+        response = { success: false, message: "Invalid action" };
+    }
+  } catch (err) {
+    response = { success: false, message: "Server error: " + err.toString() };
+  }
+
+  return output.setContent(JSON.stringify(response));
+}
+
+function getDatabase() {
+  let ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (ss) return ss;
+  
+  let files = DriveApp.getFilesByName("SIAP BOS Database");
+  if (files.hasNext()) {
+    return SpreadsheetApp.open(files.next());
+  }
+  return null;
+}
+
+function setupSystem() {
+  let ss = getDatabase();
+  
+  if (!ss) {
+    ss = SpreadsheetApp.create("SIAP BOS Database");
+  }
+  
+  // Create Sheets if they don't exist
+  ["Akun", "Data Sekolah"].forEach(name => {
+    if (!ss.getSheetByName(name)) ss.insertSheet(name);
+  });
+  
+  // Initialize Akun Sheet
+  const akSheet = ss.getSheetByName("Akun");
+  if (akSheet.getLastRow() === 0) {
+    akSheet.appendRow(["id", "username", "password", "role", "nama_sekolah", "status", "tipe_akses", "batas_waktu"]);
+    akSheet.appendRow([1, "adminmaster", "123", "master_admin", "MASTER", "aktif", "permanen", ""]);
+  }
+
+  // Initialize Data Sekolah Sheet
+  const dsSheet = ss.getSheetByName("Data Sekolah");
+  if (dsSheet.getLastRow() === 0) {
+    dsSheet.appendRow(["ID", "NPSN", "Nama Sekolah", "Kecamatan", "Kabupaten", "Provinsi", "Kepala Sekolah", "NIP Kepala Sekolah", "Bendahara", "NIP Bendahara", "Operator Sekolah"]);
+  }
+
+  // Create Root Folder
+  if (DriveApp.getFoldersByName(FOLDER_NAME).hasNext() === false) {
+    DriveApp.createFolder(FOLDER_NAME);
+  }
+
+  return { success: true, message: "Sistem berhasil di-setup" };
+}
+
+function login(data) {
+  try {
+    const ss = getDatabase();
+    if (!ss) return { success: false, message: "Database belum di-setup, jalankan setup terlebih dahulu." };
+    
+    const sheet = ss.getSheetByName("Akun");
+    if (!sheet) return { success: false, message: "Sheet Akun belum dibuat, jalankan setup terlebih dahulu." };
+    
+    const dataAkun = sheet.getDataRange().getValues();
+    
+    Logger.log("Attempting login: " + data.username);
+
+    for (let i = 1; i < dataAkun.length; i++) {
+      const u = String(dataAkun[i][1]);
+      const p = String(dataAkun[i][2]);
+      
+      if (u === String(data.username) && p === String(data.password)) {
+        return { 
+          success: true, 
+          message: "Login berhasil", 
+          data: { 
+            username: u, 
+            role: String(dataAkun[i][3]), 
+            sekolah: String(dataAkun[i][4]),
+            tipeAkses: dataAkun[i][6] || 'permanen',
+            batasWaktu: dataAkun[i][7] || ''
+          } 
+        };
+      }
+    }
+    return { success: false, message: "Username atau password salah" };
+  } catch (err) {
+    return { success: false, message: "Server: " + err.toString() };
+  }
+}
+
+function tambahSekolah(data) {
+  const ss = getDatabase();
+  if (!ss) return { success: false, message: "Database belum di-setup" };
+  
+  // Create Folder Structure
+  let rootFolder;
+  const folders = DriveApp.getFoldersByName(FOLDER_NAME);
+  if (folders.hasNext()) {
+    rootFolder = folders.next();
+  } else {
+    rootFolder = DriveApp.createFolder(FOLDER_NAME);
+  }
+  
+  const schoolFolder = rootFolder.createFolder(data.namaSekolah);
+  const dataSekolahFolder = schoolFolder.createFolder("DATA SEKOLAH");
+  const laporanFolder = schoolFolder.createFolder("LAPORAN");
+  const dokumenFolder = schoolFolder.createFolder("DOKUMEN");
+  
+  // Create Spreadsheet for the school inside DATA SEKOLAH folder
+  const schoolDbData = [
+    ["ID", "NPSN", "Nama Sekolah", "Kecamatan", "Kabupaten", "Provinsi", "Kepala Sekolah", "NIP Kepala Sekolah", "Bendahara", "NIP Bendahara", "Operator Sekolah"],
+    [new Date().getTime(), data.npsn, data.namaSekolah, data.kecamatan, data.kabupaten, data.provinsi, data.kepsek, data.nipKepsek, data.bendahara, data.nipBendahara, data.operator]
+  ];
+  
+  const schoolSpreadsheet = SpreadsheetApp.create("Database_" + data.namaSekolah);
+  const schoolFile = DriveApp.getFileById(schoolSpreadsheet.getId());
+  schoolFile.moveTo(dataSekolahFolder);
+  
+  const dsSheet = schoolSpreadsheet.getActiveSheet();
+  dsSheet.setName("Data Sekolah");
+  schoolDbData.forEach(row => dsSheet.appendRow(row));
+  
+  // Save to Master Sheets as well
+  ss.getSheetByName("Data Sekolah").appendRow([
+    new Date().getTime(), data.npsn, data.namaSekolah, data.kecamatan, 
+    data.kabupaten, data.provinsi, data.kepsek, data.nipKepsek, 
+    data.bendahara, data.nipBendahara, data.operator
+  ]);
+  
+  ss.getSheetByName("Akun").appendRow([
+    new Date().getTime(), data.username, data.password, "admin_sekolah", data.namaSekolah, "aktif", data.tipeAkses || "permanen", data.batasWaktu || ""
+  ]);
+  
+  return { success: true, message: "Sekolah berhasil ditambahkan" };
+}
+
+function getDataSekolah(data) {
+  if (data && data.role === "admin_sekolah" && data.sekolah) {
+    const folders = DriveApp.getFoldersByName(data.sekolah);
+    if (!folders.hasNext()) return { success: false, message: "Folder sekolah tidak ditemukan" };
+    const schoolFolder = folders.next();
+    const dataSekolahFolders = schoolFolder.getFoldersByName("DATA SEKOLAH");
+    if (!dataSekolahFolders.hasNext()) return { success: false, message: "Folder DATA SEKOLAH tidak ditemukan" };
+    
+    // Find the database inside
+    const dsFolder = dataSekolahFolders.next();
+    let files = dsFolder.getFilesByName("Database_" + data.sekolah);
+    let spreadsheet = null;
+    if (files.hasNext()) {
+      spreadsheet = SpreadsheetApp.open(files.next());
+    } else {
+      const allFiles = dsFolder.getFilesByType(MimeType.GOOGLE_SHEETS);
+      while (allFiles.hasNext()) {
+        const file = allFiles.next();
+        if (file.getName().indexOf("Database_") === 0) {
+          spreadsheet = SpreadsheetApp.open(file);
+          break;
+        }
+      }
+      if (!spreadsheet) {
+        const fallbackFiles = dsFolder.getFilesByType(MimeType.GOOGLE_SHEETS);
+        while (fallbackFiles.hasNext()) {
+          const file = fallbackFiles.next();
+          try {
+            const tempSs = SpreadsheetApp.open(file);
+            if (tempSs.getSheetByName("Data Sekolah")) {
+              spreadsheet = tempSs;
+              break;
+            }
+          } catch(e) {}
+        }
+      }
+    }
+    
+    if (!spreadsheet) return { success: false, message: "Database sekolah tidak ditemukan" };
+    const sheet = spreadsheet.getSheetByName("Data Sekolah");
+    if (!sheet) return { success: false, message: "Sheet tidak valid" };
+    
+    const sheetData = sheet.getDataRange().getValues();
+    return { success: true, data: sheetData };
+  }
+  
+  const ss = getDatabase();
+  if (!ss) return { success: false, message: "Database belum di-setup" };
+  
+  const sheetData = ss.getSheetByName("Data Sekolah").getDataRange().getValues();
+  const akValues = ss.getSheetByName("Akun").getDataRange().getValues();
+  
+  const akunMap = {};
+  for(let i=1; i<akValues.length; i++) {
+     akunMap[String(akValues[i][4])] = {
+       tipe_akses: akValues[i][6] || 'permanen',
+       batas_waktu: akValues[i][7] || ''
+     };
+  }
+  
+  if (sheetData.length > 0) {
+    sheetData[0].push("Tipe Akses", "Batas Waktu");
+    for(let i=1; i<sheetData.length; i++) {
+       const namaSekolah = String(sheetData[i][2]); // Nama Sekolah is at index 2
+       if (akunMap[namaSekolah]) {
+         sheetData[i].push(akunMap[namaSekolah].tipe_akses, akunMap[namaSekolah].batas_waktu);
+       } else {
+         sheetData[i].push('permanen', '');
+       }
+    }
+  }
+  
+  return { success: true, data: sheetData };
+}
+
+function perpanjangAkses(data) {
+  const ss = getDatabase();
+  if (!ss) return { success: false, message: "Database belum di-setup" };
+  
+  const akSheet = ss.getSheetByName("Akun");
+  const akValues = akSheet.getDataRange().getValues();
+  
+  let found = false;
+  for (let i = 1; i < akValues.length; i++) {
+    if (String(akValues[i][4]) === String(data.namaSekolah)) {
+      akSheet.getRange(i + 1, 7, 1, 2).setValues([[data.tipeAkses, data.batasWaktu]]);
+      found = true;
+      break;
+    }
+  }
+  
+  if (found) {
+    return { success: true, message: "Hak akses berhasil diperbarui" };
+  } else {
+    return { success: false, message: "Akun sekolah tidak ditemukan" };
+  }
+}
+
+function hapusSekolah(data) {
+  const ss = getDatabase();
+  if (!ss) return { success: false, message: "Database belum di-setup" };
+  
+  const dsSheet = ss.getSheetByName("Data Sekolah");
+  const akSheet = ss.getSheetByName("Akun");
+  
+  // Find and delete from Data Sekolah
+  const dsValues = dsSheet.getDataRange().getValues();
+  for (let i = 1; i < dsValues.length; i++) {
+    if (String(dsValues[i][0]) === String(data.id)) {
+      dsSheet.deleteRow(i + 1);
+      break;
+    }
+  }
+  
+  // Find and delete from Akun
+  const akValues = akSheet.getDataRange().getValues();
+  for (let i = 1; i < akValues.length; i++) {
+    if (String(akValues[i][4]) === String(data.namaSekolah)) {
+      akSheet.deleteRow(i + 1);
+      break;
+    }
+  }
+  
+  // Delete folder
+  if (data.namaSekolah) {
+    const folders = DriveApp.getFoldersByName(data.namaSekolah);
+    while (folders.hasNext()) {
+      folders.next().setTrashed(true);
+    }
+  }
+  
+  return { success: true, message: "Data sekolah berhasil dihapus" };
+}
+
+function editSekolah(data) {
+  const ss = getDatabase();
+  if (!ss) return { success: false, message: "Database belum di-setup" };
+  
+  let dsSheet = ss.getSheetByName("Data Sekolah");
+  let dsValues = dsSheet.getDataRange().getValues();
+  let found = false;
+  
+  for (let i = 1; i < dsValues.length; i++) {
+    if (String(dsValues[i][0]) === String(data.id)) {
+      dsSheet.getRange(i + 1, 2, 1, 10).setValues([[
+        data.npsn, data.nama, data.kecamatan, 
+        data.kabupaten, data.provinsi, data.kepsek, data.nipKepsek, 
+        data.bendahara, data.nipBendahara, data.operator
+      ]]);
+      found = true;
+      break;
+    }
+  }
+  
+  if (!found) return { success: false, message: "Data sekolah tidak ditemukan" };
+  
+  const akSheet = ss.getSheetByName("Akun");
+  const akValues = akSheet.getDataRange().getValues();
+  for (let i = 1; i < akValues.length; i++) {
+    if (String(akValues[i][4]) === String(data.namaSekolahLama || data.nama)) {
+      akSheet.getRange(i + 1, 5).setValue(data.nama);
+      break;
+    }
+  }
+  
+  // Also update the school's own spreadsheet if possible
+  const folders = DriveApp.getFoldersByName(data.namaSekolahLama || data.nama);
+  if (folders.hasNext()) {
+    const schoolFolder = folders.next();
+    
+    // rename folder if needed
+    if (data.namaSekolahLama && data.namaSekolahLama !== data.nama) {
+      schoolFolder.setName(data.nama);
+    }
+    
+    // edit the sheet
+    const dsFolders = schoolFolder.getFoldersByName("DATA SEKOLAH");
+    if (dsFolders.hasNext()) {
+      const dsFolder = dsFolders.next();
+      let files = dsFolder.getFilesByName("Database_" + (data.namaSekolahLama || data.nama));
+      let schoolSs = null;
+      if (files.hasNext()) {
+        schoolSs = SpreadsheetApp.open(files.next());
+      } else {
+        const allFiles = dsFolder.getFilesByType(MimeType.GOOGLE_SHEETS);
+        while (allFiles.hasNext()) {
+          const file = allFiles.next();
+          if (file.getName().indexOf("Database_") === 0) {
+            schoolSs = SpreadsheetApp.open(file);
+            break;
+          }
+        }
+        if (!schoolSs) {
+          const fallbackFiles = dsFolder.getFilesByType(MimeType.GOOGLE_SHEETS);
+          while (fallbackFiles.hasNext()) {
+            const file = fallbackFiles.next();
+            try {
+              const tempSs = SpreadsheetApp.open(file);
+              if (tempSs.getSheetByName("Data Sekolah")) {
+                schoolSs = tempSs;
+                break;
+              }
+            } catch(e) {}
+          }
+        }
+      }
+      
+      if (schoolSs) {
+        const schoolSheet = schoolSs.getSheetByName("Data Sekolah");
+        if (schoolSheet) {
+           const schoolDsValues = schoolSheet.getDataRange().getValues();
+           for (let i = 1; i < schoolDsValues.length; i++) {
+             if (String(schoolDsValues[i][0]) === String(data.id)) {
+               schoolSheet.getRange(i + 1, 2, 1, 10).setValues([[
+                 data.npsn, data.nama, data.kecamatan, 
+                 data.kabupaten, data.provinsi, data.kepsek, data.nipKepsek, 
+                 data.bendahara, data.nipBendahara, data.operator
+               ]]);
+               break;
+             }
+           }
+           if (data.namaSekolahLama && data.namaSekolahLama !== data.nama) {
+             schoolSs.rename("Database_" + data.nama);
+           }
+        }
+      }
+    }
+  }
+  
+  return { success: true, message: "Data sekolah berhasil diupdate" };
+}
+
+function generateReport(data) {
+  if (!data.sekolah) return { success: false, message: "Nama sekolah diperlukan" };
+  const folders = DriveApp.getFoldersByName(data.sekolah);
+  if (!folders.hasNext()) return { success: false, message: "Folder sekolah tidak ditemukan" };
+  const schoolFolder = folders.next();
+  let laporanFolder;
+  const laporanFolders = schoolFolder.getFoldersByName("LAPORAN");
+  if (laporanFolders.hasNext()) {
+    laporanFolder = laporanFolders.next();
+  } else {
+    laporanFolder = schoolFolder.createFolder("LAPORAN");
+  }
+  
+  const cleanJenis = data.jenis.replace(/[^a-zA-Z0-9]/g, "_");
+  const cleanTahap = data.tahap.replace(/[^a-zA-Z0-9]/g, "_");
+  const fileName = "Laporan_" + cleanJenis + "_" + cleanTahap + "_" + data.tahun + "_" + data.sekolah.replace(/[^a-zA-Z0-9]/g, "_");
+  
+  // Create spreadsheet
+  const ss = SpreadsheetApp.create(fileName);
+  const file = DriveApp.getFileById(ss.getId());
+  file.moveTo(laporanFolder);
+  
+  const sheet = ss.getActiveSheet();
+  sheet.setName(data.jenis.substring(0, 30));
+  
+  // Style and fill with realistic data
+  sheet.getRange("A1").setValue("SIAP BOS - LAPORAN " + data.jenis.toUpperCase()).setFontWeight("bold").setFontSize(14);
+  sheet.getRange("A2").setValue("Sekolah: " + data.sekolah);
+  sheet.getRange("A3").setValue("Tahun Anggaran: " + data.tahun + " (" + data.tahap + ")");
+  sheet.getRange("A4").setValue("Dibuat Pada: " + new Date().toLocaleString());
+  
+  const headers = ["No", "Kode Kegiatan", "Rincian Pekerjaan / Alokasi Dana", "Pagu Anggaran (Rp)", "Realisasi Pengeluaran (Rp)", "Sisa Saldo (Rp)"];
+  sheet.appendRow([]);
+  sheet.appendRow(headers);
+  sheet.getRange("A6:F6").setFontWeight("bold").setBackground("#e2e8f0");
+  
+  const rincianDemo = [
+    ["1", "2.1.1", "Pengembangan Jasa Perpustakaan & Buku Utama", 15000000, 14200000, "=D8-E8"],
+    ["2", "2.1.2", "Penerimaan Peserta Didik Baru (PPDB)", 5000000, 4850000, "=D9-E9"],
+    ["3", "2.1.3", "Kegiatan Asesmen & Evaluasi Pembelajaran", 8500000, 8100000, "=D10-E10"],
+    ["4", "2.1.4", "Pengembangan Kegiatan Ekstrakurikuler", 12000000, 11500000, "=D11-E11"],
+    ["5", "2.1.5", "Pemeliharaan Sarana & Prasarana Sekolah", 25000000, 24800000, "=D12-E12"],
+    ["6", "2.1.6", "Langganan Daya dan Jasa (Listrik & Internet)", 9000000, 8750000, "=D13-E13"]
+  ];
+  
+  rincianDemo.forEach(row => sheet.appendRow(row));
+  sheet.appendRow(["", "", "TOTAL", "=SUM(D8:D13)", "=SUM(E8:E13)", "=SUM(F8:F13)"]);
+  sheet.getRange("C14:F14").setFontWeight("bold").setBackground("#f1f5f9");
+  
+  return { 
+    success: true, 
+    message: "Laporan " + data.jenis + " berhasil dibuat!", 
+    fileUrl: file.getUrl(),
+    fileName: fileName
+  };
+}
+
+function getGeneratedReports(data) {
+  if (!data.sekolah) return { success: false, message: "Nama sekolah diperlukan" };
+  const folders = DriveApp.getFoldersByName(data.sekolah);
+  if (!folders.hasNext()) return { success: false, data: [] };
+  const schoolFolder = folders.next();
+  const laporanFolders = schoolFolder.getFoldersByName("LAPORAN");
+  if (!laporanFolders.hasNext()) return { success: true, data: [] };
+  
+  const laporanFolder = laporanFolders.next();
+  const files = laporanFolder.getFiles();
+  const results = [];
+  
+  while (files.hasNext()) {
+    const file = files.next();
+    results.push({
+      name: file.getName(),
+      url: file.getUrl(),
+      created: file.getDateCreated().toISOString(),
+      size: Math.round(file.getSize() / 1024) + " KB"
+    });
+  }
+  
+  results.sort((a, b) => new Date(b.created).getTime() - new Date(a.created).getTime());
+  
+  return { success: true, data: results };
+}
+
+function generateDatabase(data) {
+  if (!data.sekolah) return { success: false, message: "Nama sekolah diperlukan" };
+  if (!data.tahun) return { success: false, message: "Tahun anggaran diperlukan" };
+
+  const folders = DriveApp.getFoldersByName(data.sekolah);
+  if (!folders.hasNext()) return { success: false, message: "Folder sekolah tidak ditemukan" };
+  const schoolFolder = folders.next();
+  let dataSekolahFolder;
+  const dataSekolahFolders = schoolFolder.getFoldersByName("DATA SEKOLAH");
+  if (dataSekolahFolders.hasNext()) {
+    dataSekolahFolder = dataSekolahFolders.next();
+  } else {
+    dataSekolahFolder = schoolFolder.createFolder("DATA SEKOLAH");
+  }
+
+  const fileName = "SIAP_BOS_" + data.tahun;
+  
+  // Check if file already exists to prevent duplicate databases
+  const files = dataSekolahFolder.getFilesByName(fileName);
+  if (files.hasNext()) {
+    const existingFile = files.next();
+    return { 
+      success: false, 
+      message: "Database " + fileName + " sudah ada!", 
+      fileUrl: existingFile.getUrl(),
+      fileName: fileName
+    };
+  }
+
+  // Create spreadsheet
+  const ss = SpreadsheetApp.create(fileName);
+  const file = DriveApp.getFileById(ss.getId());
+  file.moveTo(dataSekolahFolder);
+
+  // Sheet 1: DASHBOARD
+  const dashSheet = ss.getActiveSheet();
+  dashSheet.setName("DASHBOARD");
+  dashSheet.getRange("A1").setValue("SIAP BOS - DATABASE KEUANGAN SEKOLAH").setFontWeight("bold").setFontSize(14).setFontColor("#1e3a8a");
+  dashSheet.getRange("A2").setValue("Nama Sekolah: " + data.sekolah).setFontWeight("bold");
+  dashSheet.getRange("A3").setValue("Tahun Anggaran: " + data.tahun).setFontWeight("bold");
+  dashSheet.getRange("A4").setValue("Dibuat Pada: " + new Date().toLocaleString());
+
+  dashSheet.getRange("A6:D6").setValues([["Ringkasan", "Pagu Anggaran", "Realisasi Belanja", "Sisa Anggaran"]]).setFontWeight("bold").setBackground("#e2e8f0");
+
+  // Sheet 2: RKAS (Empty of dummy rows)
+  const rkasSheet = ss.insertSheet("RKAS");
+  rkasSheet.getRange("A1").setValue("RENCANA KEGIATAN DAN ANGGARAN SEKOLAH (RKAS) " + data.tahun).setFontWeight("bold").setFontSize(12);
+  rkasSheet.getRange("A2").setValue("Sekolah: " + data.sekolah);
+  const rkasHeaders = ["No", "Kode Rekening", "Kode Kegiatan", "Rincian Program / Sub-Kegiatan", "Pagu Anggaran (Rp)"];
+  rkasSheet.getRange("A5:E5").setValues([rkasHeaders]).setFontWeight("bold").setBackground("#cbd5e1");
+  rkasSheet.getRange("B6:C1000").setNumberFormat("@");
+
+  // Sheet 3: BUKU KAS UMUM (Empty of dummy rows)
+  const bkuSheet = ss.insertSheet("BUKU KAS UMUM");
+  bkuSheet.getRange("A1").setValue("BUKU KAS UMUM (BKU) TAHUN ANGGARAN " + data.tahun).setFontWeight("bold").setFontSize(12);
+  bkuSheet.getRange("A2").setValue("Sekolah: " + data.sekolah);
+  const bkuHeaders = ["No", "Tanggal", "No Bukti", "Keterangan Transaksi", "Penerimaan / Debit (Rp)", "Pengeluaran / Kredit (Rp)", "Saldo Kas (Rp)"];
+  bkuSheet.getRange("A5:G5").setValues([bkuHeaders]).setFontWeight("bold").setBackground("#94a3b8").setFontColor("#ffffff");
+  bkuSheet.getRange("E6:G1000").setNumberFormat("Rp#,##0");
+
+  // Set formulas on DASHBOARD now that 'RKAS' and 'BUKU KAS UMUM' sheets exist to prevent Google Sheets #REF! errors
+  dashSheet.getRange("A7:D7").setValues([["Total Dana BOS", "=SUM('RKAS'!E6:E1000)", "=SUM('BUKU KAS UMUM'!F6:F1000)", "=B7-C7"]]);
+  dashSheet.getRange("B7:D7").setNumberFormat("Rp#,##0");
+
+  return {
+    success: true,
+    message: "Database tahunan " + fileName + " berhasil di-generate di folder DATA SEKOLAH!",
+    fileUrl: file.getUrl(),
+    fileName: fileName
+  };
+}
+
+function deleteDatabase(data) {
+  if (!data.sekolah) return { success: false, message: "Nama sekolah diperlukan" };
+  if (!data.tahun) return { success: false, message: "Tahun anggaran diperlukan" };
+
+  const folders = DriveApp.getFoldersByName(data.sekolah);
+  if (!folders.hasNext()) return { success: false, message: "Folder sekolah tidak ditemukan" };
+  const schoolFolder = folders.next();
+  const dataSekolahFolders = schoolFolder.getFoldersByName("DATA SEKOLAH");
+  if (!dataSekolahFolders.hasNext()) return { success: false, message: "Folder DATA SEKOLAH tidak ditemukan" };
+  
+  const dataSekolahFolder = dataSekolahFolders.next();
+  const fileName = "SIAP_BOS_" + data.tahun;
+  const files = dataSekolahFolder.getFilesByName(fileName);
+  
+  let deletedCount = 0;
+  while (files.hasNext()) {
+    const file = files.next();
+    file.setTrashed(true);
+    deletedCount++;
+  }
+  
+  if (deletedCount > 0) {
+    return { success: true, message: "Database tahun anggaran " + data.tahun + " berhasil dihapus dari GDrive." };
+  } else {
+    return { success: false, message: "Database " + fileName + " tidak ditemukan." };
+  }
+}
+
+function getGeneratedDatabases(data) {
+  if (!data.sekolah) return { success: false, message: "Nama sekolah diperlukan" };
+  const folders = DriveApp.getFoldersByName(data.sekolah);
+  if (!folders.hasNext()) return { success: true, data: [] };
+  const schoolFolder = folders.next();
+  const dataSekolahFolders = schoolFolder.getFoldersByName("DATA SEKOLAH");
+  if (!dataSekolahFolders.hasNext()) return { success: true, data: [] };
+  
+  const dataSekolahFolder = dataSekolahFolders.next();
+  const files = dataSekolahFolder.getFiles();
+  const results = [];
+  
+  while (files.hasNext()) {
+    const file = files.next();
+    const name = file.getName();
+    if (name.indexOf("SIAP_BOS_") === 0) {
+      results.push({
+        name: name,
+        url: file.getUrl(),
+        created: file.getDateCreated().toISOString(),
+        size: Math.round(file.getSize() / 1024) + " KB"
+      });
+    }
+  }
+  
+  results.sort((a, b) => b.name.localeCompare(a.name)); // Sort by filename e.g. SIAP_BOS_2027 down to SIAP_BOS_2025
+  
+  return { success: true, data: results };
+}
+
+function importData(data) {
+  if (!data.sekolah) return { success: false, message: "Nama sekolah diperlukan" };
+  if (!data.tahun) return { success: false, message: "Tahun diperlukan" };
+  if (!data.tipe) return { success: false, message: "Tipe dokumen (RKAS / BKU) diperlukan" };
+
+  const folders = DriveApp.getFoldersByName(data.sekolah);
+  if (!folders.hasNext()) return { success: false, message: "Folder sekolah tidak ditemukan" };
+  const schoolFolder = folders.next();
+  
+  const dataSekolahFolders = schoolFolder.getFoldersByName("DATA SEKOLAH");
+  if (!dataSekolahFolders.hasNext()) return { success: false, message: "Folder DATA SEKOLAH tidak ditemukan" };
+  const dataSekolahFolder = dataSekolahFolders.next();
+  
+  const fileName = "SIAP_BOS_" + data.tahun;
+  const files = dataSekolahFolder.getFilesByName(fileName);
+  if (!files.hasNext()) return { success: false, message: "Database file " + fileName + " tidak ditemukan" };
+  
+  const file = files.next();
+  const ss = SpreadsheetApp.openById(file.getId());
+  
+  let sheet;
+  if (data.tipe === "RKAS") {
+    sheet = ss.getSheetByName("RKAS");
+    if (!sheet) {
+      sheet = ss.insertSheet("RKAS");
+    }
+    // Clear and write headers
+    sheet.clear();
+    sheet.getRange("A1").setValue("RENCANA KEGIATAN DAN ANGGARAN SEKOLAH (RKAS) " + data.tahun).setFontWeight("bold").setFontSize(12);
+    sheet.getRange("A2").setValue("Sekolah: " + data.sekolah);
+    sheet.getRange("A5:E5").setValues([["No", "Kode Rekening", "Kode Kegiatan", "Rincian Program / Sub-Kegiatan", "Pagu Anggaran (Rp)"]]).setFontWeight("bold").setBackground("#cbd5e1");
+    sheet.getRange("B6:C1000").setNumberFormat("@");
+    
+    // Append rows
+    if (data.rows && data.rows.length > 0) {
+      data.rows.forEach(function(row, idx) {
+        const parts = (row.kode || "").split(' - ');
+        const kodeKegiatan = parts[0] || '';
+        const kodeRekening = parts[1] || '';
+        sheet.appendRow([idx + 1, kodeRekening, kodeKegiatan, row.rincian, parseFloat(row.pagu)]);
+      });
+    }
+    sheet.appendRow(["", "", "", "TOTAL ANGGARAN", "=SUM(E6:E" + (5 + (data.rows ? data.rows.length : 0)) + ")"]);
+    sheet.getRange("D" + (6 + (data.rows ? data.rows.length : 0)) + ":E" + (6 + (data.rows ? data.rows.length : 0))).setFontWeight("bold").setBackground("#f1f5f9");
+    sheet.getRange("E6:E" + (6 + (data.rows ? data.rows.length : 0))).setNumberFormat("Rp#,##0");
+  } else {
+    // It's a BKU Month, save/overwrite or create a sheet for that month e.g. "BKU_JANUARI"
+    const sheetName = "BKU " + data.tipe.toUpperCase(); // e.g. "BKU JANUARI"
+    sheet = ss.getSheetByName(sheetName);
+    if (sheet) {
+      sheet.clear();
+    } else {
+      sheet = ss.insertSheet(sheetName);
+    }
+    sheet.getRange("A1").setValue("BUKU KAS UMUM (BKU) BULAN " + data.tipe.toUpperCase() + " TAHUN " + data.tahun).setFontWeight("bold").setFontSize(12);
+    sheet.getRange("A2").setValue("Sekolah: " + data.sekolah);
+    sheet.getRange("A5:F5").setValues([["Tanggal", "Kode Kegiatan", "Kode Rekening", "No. Bukti", "Uraian", "Pengeluaran"]]).setFontWeight("bold").setBackground("#94a3b8").setFontColor("#ffffff");
+    sheet.getRange("B6:C1000").setNumberFormat("@"); // Keep strings
+    
+    if (data.rows && data.rows.length > 0) {
+      data.rows.forEach(function(row, idx) {
+        sheet.appendRow([row.tanggal, row.kodeKegiatan || "", row.kodeRekening || "", row.bukti || "", row.keterangan || "", parseFloat(row.kredit || 0)]);
+      });
+    }
+    sheet.getRange("F6:F" + (6 + (data.rows ? data.rows.length : 0))).setNumberFormat("Rp#,##0");
+  }
+
+  // Update total on DASHBOARD
+  const dashSheet = ss.getSheetByName("DASHBOARD");
+  if (dashSheet) {
+    dashSheet.getRange("B7").setValue("=SUM('RKAS'!E6:E1000)");
+    
+    const sheets = ss.getSheets();
+    let bkuFormulaArr = [];
+    sheets.forEach(function(s) {
+      const sName = s.getName();
+      if (sName.indexOf("BKU ") === 0) {
+        bkuFormulaArr.push("SUM('" + sName + "'!F6:F100)");
+      }
+    });
+    if (bkuFormulaArr.length > 0) {
+      dashSheet.getRange("C7").setValue("=" + bkuFormulaArr.join("+"));
+    } else {
+      dashSheet.getRange("C7").setValue("=SUM('BUKU KAS UMUM'!E6:E9)"); // default BKU sheet
+    }
+  }
+
+  return { success: true, message: "Data " + data.tipe + " berhasil di-import ke Database!" };
+}
+
+function generatePDFDoc(data) {
+  if (!data.sekolah) return { success: false, message: "Nama sekolah diperlukan" };
+  if (!data.tahun) return { success: false, message: "Tahun diperlukan" };
+  if (!data.tipe) return { success: false, message: "Tipe dokumen diperlukan" };
+
+  const folders = DriveApp.getFoldersByName(data.sekolah);
+  if (!folders.hasNext()) return { success: false, message: "Folder sekolah tidak ditemukan" };
+  const schoolFolder = folders.next();
+  
+  let pdfFolder;
+  const pdfFolders = schoolFolder.getFoldersByName("PDF_LAPORAN");
+  if (pdfFolders.hasNext()) {
+    pdfFolder = pdfFolders.next();
+  } else {
+    pdfFolder = schoolFolder.createFolder("PDF_LAPORAN");
+  }
+
+  const docName = "PDF_" + data.tipe.replace(/\s+/g, "_") + "_" + data.tahun + "_" + data.sekolah.replace(/[^a-zA-Z0-9]/g, "_");
+  
+  // Delete existing if same to avoid clutter
+  const existingPdfFiles = pdfFolder.getFilesByName(docName + ".pdf");
+  while (existingPdfFiles.hasNext()) {
+    existingPdfFiles.next().setTrashed(true);
+  }
+
+  // Create a beautiful Google Doc first to convert into a genuine PDF
+  const tempDoc = DocumentApp.create(docName);
+  const body = tempDoc.getBody();
+  
+  body.setMarginTop(36);
+  body.setMarginBottom(36);
+  body.setMarginLeft(36);
+  body.setMarginRight(36);
+  
+  const headerPara = body.appendParagraph("SISTEM INFORMASI APLIKASI BOS (SIAP BOS)");
+  headerPara.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  headerPara.setFontSize(14).setFontFamily("Trebuchet MS").setBold(true).setFontColor("#1e3a8a");
+  
+  const subHeaderPara = body.appendParagraph("LAPORAN FORMAL DOKUMEN: " + data.tipe.toUpperCase() + " TAHUN " + data.tahun);
+  subHeaderPara.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  subHeaderPara.setFontSize(11).setFontFamily("Trebuchet MS").setBold(true).setFontColor("#4b5563");
+  
+  body.appendParagraph("------------------------------------------------------------------------------------------------------------------------")
+      .setAlignment(DocumentApp.HorizontalAlignment.CENTER).setFontColor("#d1d5db");
+  
+  body.appendParagraph("Nama Sekolah : " + data.sekolah).setFontSize(10).setFontFamily("Arial").setBold(true);
+  body.appendParagraph("Tahun Anggaran : " + data.tahun).setFontSize(10).setFontFamily("Arial").setBold(true);
+  body.appendParagraph("Jenis Dokumen : " + data.tipe).setFontSize(10).setFontFamily("Arial").setBold(true);
+  body.appendParagraph("Tanggal Generate : " + new Date().toLocaleString()).setFontSize(9).setFontFamily("Arial").setFontColor("#6b7280");
+  body.appendParagraph("\n");
+
+  let tableData = [];
+  if (data.tipe === "RKAS") {
+    tableData = [
+      ["No", "Kode Rekening", "Kode Kegiatan", "Rincian Program / Sub-Kegiatan", "Pagu Anggaran (Rp)"],
+      ["1", "5.1.02.01.01.0024", "2.1.1", "Penyediaan Alat Tulis Kantor (ATK) Kegiatan Belajar Mengajar", "Rp 4.500.000"],
+      ["2", "5.1.02.01.01.0025", "2.1.2", "Pemberdayaan Perpustakaan & Pembelian Buku Teks Utama", "Rp 12.000.000"],
+      ["3", "5.1.02.01.01.0026", "2.1.3", "Biaya Konsumsi Rapat Guru & Wali Murid", "Rp 3.500.000"],
+      ["4", "5.1.02.01.01.0027", "2.1.4", "Langganan Jasa Akses Internet Kecepatan Tinggi (Wifi)", "Rp 6.800.000"],
+      ["5", "5.1.02.01.01.0028", "2.1.5", "Pemeliharaan/Pengecatan Ruang Kelas & Taman Sekolah", "Rp 18.500.000"],
+      ["6", "5.1.02.01.01.0029", "2.1.6", "Pengadaan Alat Kebersihan & Kesehatan Sekolah", "Rp 2.000.000"],
+      ["", "", "TOTAL ANGGARAN", "", "Rp 47.300.000"]
+    ];
+  } else {
+    tableData = [
+      ["No", "Tanggal", "Kode Kegiatan", "Kode Rekening", "No. Bukti", "Uraian", "Pengeluaran (Rp)"],
+      ["1", "05/01/" + data.tahun, "2.1.1", "5.1.02.01.01.0024", "KK-01", "Pembelian Kertas HVS & Tinta Printer", "Rp 1.250.000"],
+      ["2", "12/01/" + data.tahun, "2.1.2", "5.1.02.01.01.0025", "KK-02", "Pembayaran Rekening Listrik Sekolah", "Rp 650.000"],
+      ["3", "18/01/" + data.tahun, "2.1.3", "5.1.02.01.01.0026", "KK-03", "Pembelian Buku Cerita & Literatur", "Rp 4.200.000"]
+    ];
+  }
+
+  if (data.rows && data.rows.length > 0) {
+    if (data.tipe === "RKAS") {
+      tableData = [["No", "Kode Rekening", "Kode Kegiatan", "Rincian Program / Sub-Kegiatan", "Pagu Anggaran (Rp)"]];
+      let totalPagu = 0;
+      data.rows.forEach(function(row, i) {
+        const p = parseFloat(row.pagu) || 0;
+        totalPagu += p;
+        const parts = (row.kode || "").split(' - ');
+        const kodeKegiatan = parts[0] || '';
+        const kodeRekening = parts[1] || '';
+        tableData.push([(i+1).toString(), kodeRekening, kodeKegiatan, row.rincian, "Rp " + p.toLocaleString('id-ID')]);
+      });
+      tableData.push(["", "", "TOTAL ANGGARAN", "", "Rp " + totalPagu.toLocaleString('id-ID')]);
+    } else {
+      tableData = [["No", "Tanggal", "Kode Kegiatan", "Kode Rekening", "No. Bukti", "Uraian", "Pengeluaran (Rp)"]];
+      let totalPengeluaran = 0;
+      data.rows.forEach(function(row, i) {
+        const k = parseFloat(row.kredit) || 0;
+        totalPengeluaran += k;
+        tableData.push([
+          (i+1).toString(), 
+          row.tanggal || "", 
+          row.kodeKegiatan || "", 
+          row.kodeRekening || "", 
+          row.bukti || "", 
+          row.keterangan || "", 
+          "Rp " + k.toLocaleString('id-ID')
+        ]);
+      });
+      tableData.push(["", "", "", "", "TOTAL PENGELUARAN", "", "Rp " + totalPengeluaran.toLocaleString('id-ID')]);
+    }
+  }
+
+  const table = body.appendTable(tableData);
+  table.setBorderColor("#cbd5e1");
+  table.setBorderWidth(1);
+  
+  const headerRow = table.getRow(0);
+  for (let i = 0; i < headerRow.getNumCells(); i++) {
+    const cell = headerRow.getCell(i);
+    cell.setBackgroundColor("#e2e8f0");
+    cell.getChild(0).asParagraph().setBold(true).setFontSize(9).setFontFamily("Arial");
+  }
+
+  const totalRow = table.getRow(table.getNumRows() - 1);
+  for (let i = 0; i < totalRow.getNumCells(); i++) {
+     totalRow.getCell(i).setBackgroundColor("#f1f5f9");
+     totalRow.getCell(i).getChild(0).asParagraph().setBold(true).setFontSize(9).setFontFamily("Arial");
+  }
+
+  body.appendParagraph("\n\n\n");
+  const sigTableData = [
+    ["Mengetahui,", "Bendahara BOS,"],
+    ["Kepala Sekolah " + data.sekolah, ""],
+    ["\n\n\n.....................................................", "\n\n\n....................................................."],
+    ["NIP. .............................................", "NIP. ............................................."]
+  ];
+  const sigTable = body.appendTable(sigTableData);
+  sigTable.setBorderColor("#ffffff");
+  
+  for (let r = 0; r < sigTable.getNumRows(); r++) {
+    for (let c = 0; c < sigTable.getRow(r).getNumCells(); c++) {
+      sigTable.getRow(r).getCell(c).getChild(0).asParagraph().setFontSize(9).setFontFamily("Arial");
+    }
+  }
+
+  tempDoc.saveAndClose();
+  
+  const tempFile = DriveApp.getFileById(tempDoc.getId());
+  const pdfBlob = tempFile.getAs('application/pdf');
+  const pdfFile = pdfFolder.createFile(pdfBlob).setName(docName + ".pdf");
+  
+  tempFile.setTrashed(true);
+
+  return { 
+    success: true, 
+    message: "Laporan PDF " + data.tipe + " berhasil dibuat dan disimpan!", 
+    fileUrl: pdfFile.getUrl(),
+    fileName: docName + ".pdf"
+  };
+}
+
+function getGeneratedPDFDocs(data) {
+  if (!data.sekolah) return { success: false, message: "Nama sekolah diperlukan" };
+  const folders = DriveApp.getFoldersByName(data.sekolah);
+  if (!folders.hasNext()) return { success: true, data: [] };
+  const schoolFolder = folders.next();
+  const pdfFolders = schoolFolder.getFoldersByName("PDF_LAPORAN");
+  if (!pdfFolders.hasNext()) return { success: true, data: [] };
+  
+  const pdfFolder = pdfFolders.next();
+  const files = pdfFolder.getFiles();
+  const results = [];
+  
+  while (files.hasNext()) {
+    const file = files.next();
+    results.push({
+      name: file.getName(),
+      url: file.getUrl(),
+      created: file.getDateCreated().toISOString(),
+      size: Math.round(file.getSize() / 1024) + " KB"
+    });
+  }
+  
+  results.sort((a, b) => new Date(b.created).getTime() - new Date(a.created).getTime());
+  
+  return { success: true, data: results };
+}
+
+function getImportedData(data) {
+  if (!data.sekolah) return { success: false, message: "Nama sekolah diperlukan" };
+  if (!data.tahun) return { success: false, message: "Tahun diperlukan" };
+  if (!data.tipe) return { success: false, message: "Tipe dokumen (RKAS / BKU) diperlukan" };
+
+  const folders = DriveApp.getFoldersByName(data.sekolah);
+  if (!folders.hasNext()) return { success: false, message: "Folder sekolah tidak ditemukan" };
+  const schoolFolder = folders.next();
+  
+  const dataSekolahFolders = schoolFolder.getFoldersByName("DATA SEKOLAH");
+  if (!dataSekolahFolders.hasNext()) return { success: false, message: "Folder DATA SEKOLAH tidak ditemukan" };
+  const dataSekolahFolder = dataSekolahFolders.next();
+  
+  const fileName = "SIAP_BOS_" + data.tahun;
+  const files = dataSekolahFolder.getFilesByName(fileName);
+  if (!files.hasNext()) return { success: true, rows: [] };
+  
+  const file = files.next();
+  const ss = SpreadsheetApp.openById(file.getId());
+  
+  let sheet;
+  const results = [];
+  
+  if (data.tipe === "RKAS") {
+    sheet = ss.getSheetByName("RKAS");
+    if (!sheet) return { success: true, rows: [] };
+    
+    const range = sheet.getDataRange();
+    const rows = range.getValues();
+    const displayValues = range.getDisplayValues();
+    
+    // Check if the sheet has the new 5-column layout (with Kode Rekening at column B, index 1)
+    const isNewLayout = (rows[4] && rows[4].length >= 5 && String(rows[4][1]).toLowerCase().indexOf("rekening") !== -1);
+    
+    for (let i = 5; i < rows.length; i++) {
+      const row = rows[i];
+      if (isNewLayout) {
+        if (row[3] === "TOTAL ANGGARAN" || (!row[1] && !row[2]) || (String(row[1]).trim() === "" && String(row[2]).trim() === "")) continue;
+        
+        let reqKode = row[1];
+        if (reqKode instanceof Date) {
+          reqKode = displayValues[i][1];
+        } else {
+          reqKode = String(reqKode || "");
+        }
+        
+        let kegKode = row[2];
+        if (kegKode instanceof Date) {
+          kegKode = displayValues[i][2];
+        } else {
+          kegKode = String(kegKode || "");
+        }
+        
+        let compositeKode = "";
+        if (kegKode && reqKode) {
+          compositeKode = kegKode + " - " + reqKode;
+        } else if (kegKode) {
+          compositeKode = kegKode;
+        } else {
+          compositeKode = reqKode;
+        }
+        
+        results.push({
+          kode: compositeKode,
+          rincian: String(row[3] || ""),
+          pagu: String(row[4] || 0)
+        });
+      } else {
+        if (row[2] === "TOTAL ANGGARAN" || !row[1] || String(row[1]).trim() === "") continue;
+        
+        let kodeVal = row[1];
+        if (kodeVal instanceof Date) {
+          kodeVal = displayValues[i][1];
+        } else {
+          kodeVal = String(kodeVal || "");
+        }
+        
+        results.push({
+          kode: kodeVal,
+          rincian: String(row[2] || ""),
+          pagu: String(row[3] || 0)
+        });
+      }
+    }
+  } else {
+    const sheetName = "BKU " + data.tipe.toUpperCase();
+    sheet = ss.getSheetByName(sheetName);
+    if (!sheet) return { success: true, rows: [] };
+    
+    const range = sheet.getDataRange();
+    const rows = range.getValues();
+    const displayValues = range.getDisplayValues();
+    const headers = rows[4] || [];
+    // If column C is "Kode Rekening" or row of headers is the new 6-column format:
+    // A: Tanggal, B: Kode Kegiatan, C: Kode Rekening, D: No. Bukti, E: Uraian, F: Pengeluaran
+    const isNewBkuFormat = (headers.length >= 6 && String(headers[2]).toLowerCase().indexOf("rekening") !== -1);
+    
+    for (let i = 5; i < rows.length; i++) {
+      const row = rows[i];
+      if (isNewBkuFormat) {
+        if (!row[0] && !row[4]) continue;
+        
+        let kegKode = row[1];
+        if (kegKode instanceof Date) {
+          kegKode = displayValues[i][1];
+        } else {
+          kegKode = String(kegKode || "");
+        }
+        
+        let rekKode = row[2];
+        if (rekKode instanceof Date) {
+          rekKode = displayValues[i][2];
+        } else {
+          rekKode = String(rekKode || "");
+        }
+        
+        results.push({
+          tanggal: String(row[0] || ""),
+          kodeKegiatan: kegKode,
+          kodeRekening: rekKode,
+          bukti: String(row[3] || ""),
+          keterangan: String(row[4] || ""),
+          debit: "0",
+          kredit: String(row[5] || 0)
+        });
+      } else {
+        // Fallback for older format
+        if (!row[1] && !row[3]) continue;
+        results.push({
+          tanggal: String(row[1] || ""),
+          kodeKegiatan: "",
+          kodeRekening: "",
+          bukti: String(row[2] || ""),
+          keterangan: String(row[3] || ""),
+          debit: String(row[4] || 0),
+          kredit: String(row[5] || 0)
+        });
+      }
+    }
+  }
+  
+  return { success: true, rows: results };
+}
+
+function saveKwitansi(data) {
+  if (!data.sekolah) return { success: false, message: "Nama sekolah diperlukan" };
+  if (!data.tahun) return { success: false, message: "Tahun diperlukan" };
+  if (!data.receipt) return { success: false, message: "Data kwitansi diperlukan" };
+
+  const folders = DriveApp.getFoldersByName(data.sekolah);
+  if (!folders.hasNext()) return { success: false, message: "Folder sekolah tidak ditemukan" };
+  const schoolFolder = folders.next();
+  
+  const dataSekolahFolders = schoolFolder.getFoldersByName("DATA SEKOLAH");
+  if (!dataSekolahFolders.hasNext()) return { success: false, message: "Folder DATA SEKOLAH tidak ditemukan" };
+  const dataSekolahFolder = dataSekolahFolders.next();
+  
+  const fileName = "SIAP_BOS_" + data.tahun;
+  const files = dataSekolahFolder.getFilesByName(fileName);
+  if (!files.hasNext()) return { success: false, message: "Database file " + fileName + " tidak ditemukan" };
+  
+  const file = files.next();
+  const ss = SpreadsheetApp.openById(file.getId());
+  
+  let sheet = ss.getSheetByName("KWITANSI");
+  if (!sheet) {
+    sheet = ss.insertSheet("KWITANSI");
+    sheet.appendRow(["ID", "No Kwitansi", "Sudah Terima Dari", "Terbilang", "Jumlah Uang (Rp)", "Untuk Pembayaran", "Tanggal", "Tempat", "Penerima / Bendahara", "Kepala Sekolah", "Tanggal Simpan"]);
+    sheet.getRange("A1:K1").setFontWeight("bold").setBackground("#475569").setFontColor("#ffffff");
+  }
+  
+  const rec = data.receipt;
+  const idStr = rec.id || ("KWID_" + new Date().getTime());
+  const rowData = [
+    idStr,
+    rec.noKwitansi || "",
+    rec.sudahTerimaDari || "",
+    rec.terbilang || "",
+    parseFloat(rec.jumlahUang) || 0,
+    rec.untukPembayaran || "",
+    rec.tanggal || "",
+    rec.tempat || "Jakarta",
+    rec.penerima || "",
+    rec.mengetahui || "",
+    new Date().toISOString()
+  ];
+  
+  const range = sheet.getDataRange().getValues();
+  let rowIdx = -1;
+  for (let i = 1; i < range.length; i++) {
+    if (range[i][0] === idStr) {
+      rowIdx = i + 1;
+      break;
+    }
+  }
+  
+  if (rowIdx > 0) {
+    sheet.getRange(rowIdx, 1, 1, rowData.length).setValues([rowData]);
+  } else {
+    sheet.appendRow(rowData);
+  }
+  
+  return { success: true, message: "Kwitansi berhasil disimpan ke Database!" };
+}
+
+function getKwitansis(data) {
+  if (!data.sekolah) return { success: false, message: "Nama sekolah diperlukan" };
+  if (!data.tahun) return { success: false, message: "Tahun diperlukan" };
+
+  const folders = DriveApp.getFoldersByName(data.sekolah);
+  if (!folders.hasNext()) return { success: true, data: [] };
+  const schoolFolder = folders.next();
+  
+  const dataSekolahFolders = schoolFolder.getFoldersByName("DATA SEKOLAH");
+  if (!dataSekolahFolders.hasNext()) return { success: true, data: [] };
+  const dataSekolahFolder = dataSekolahFolders.next();
+  
+  const fileName = "SIAP_BOS_" + data.tahun;
+  const files = dataSekolahFolder.getFilesByName(fileName);
+  if (!files.hasNext()) return { success: true, data: [] };
+  
+  const file = files.next();
+  const ss = SpreadsheetApp.openById(file.getId());
+  
+  const sheet = ss.getSheetByName("KWITANSI");
+  if (!sheet) return { success: true, data: [] };
+  
+  const range = sheet.getDataRange().getValues();
+  const results = [];
+  
+  for (let i = 1; i < range.length; i++) {
+    const row = range[i];
+    if (!row[0]) continue;
+    results.push({
+      id: String(row[0]),
+      noKwitansi: String(row[1]),
+      sudahTerimaDari: String(row[2]),
+      terbilang: String(row[3]),
+      jumlahUang: Number(row[4] || 0),
+      untukPembayaran: String(row[5]),
+      tanggal: String(row[6]),
+      tempat: String(row[7]),
+      penerima: String(row[8]),
+      mengetahui: String(row[9]),
+      created: String(row[10])
+    });
+  }
+  
+  return { success: true, data: results };
+}
+
+function checkBkuMonths(data) {
+  if (!data.sekolah) return { success: false, message: "Nama sekolah diperlukan" };
+  if (!data.tahun) return { success: false, message: "Tahun diperlukan" };
+
+  const folders = DriveApp.getFoldersByName(data.sekolah);
+  if (!folders.hasNext()) return { success: false, message: "Folder sekolah tidak ditemukan" };
+  const schoolFolder = folders.next();
+  
+  const dataSekolahFolders = schoolFolder.getFoldersByName("DATA SEKOLAH");
+  if (!dataSekolahFolders.hasNext()) return { success: false, message: "Folder DATA SEKOLAH tidak ditemukan" };
+  const dataSekolahFolder = dataSekolahFolders.next();
+  
+  const fileName = "SIAP_BOS_" + data.tahun;
+  const files = dataSekolahFolder.getFilesByName(fileName);
+  if (!files.hasNext()) return { success: true, months: [] };
+  
+  const file = files.next();
+  const ss = SpreadsheetApp.openById(file.getId());
+  const sheets = ss.getSheets();
+  const monthsWithData = [];
+  
+  sheets.forEach(function(sheet) {
+    const name = sheet.getName();
+    if (name.indexOf("BKU ") === 0) {
+      const month = name.substring(4); // e.g. "JANUARI"
+      const lastRow = sheet.getLastRow();
+      if (lastRow > 5) {
+        monthsWithData.push(month.charAt(0) + month.substring(1).toLowerCase()); // e.g. "Januari"
+      }
+    }
+  });
+  
+  return { success: true, months: monthsWithData };
+}

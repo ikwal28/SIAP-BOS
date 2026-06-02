@@ -1,0 +1,51 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import * as React from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { Toaster } from 'sonner';
+import Login from './pages/Login';
+import Dashboard from './pages/Dashboard';
+import DataSekolah from './pages/DataSekolah';
+import TambahSekolah from './pages/TambahSekolah';
+import EditSekolah from './pages/EditSekolah';
+import Settings from './pages/Settings';
+import Rkas from './pages/Rkas';
+import Bku from './pages/Bku';
+import Kwitansi from './pages/Kwitansi';
+import Cetak from './pages/Cetak';
+import NotFound from './pages/NotFound';
+import AppLayout from './layouts/AppLayout';
+import { AuthProvider, useAuth } from './context/AuthContext';
+
+const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
+  const { user } = useAuth();
+  return user ? children : <Navigate to="/" />;
+};
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <Toaster richColors position="top-center" />
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<Login />} />
+          <Route element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/sekolah" element={<DataSekolah />} />
+            <Route path="/sekolah/tambah" element={<TambahSekolah />} />
+            <Route path="/sekolah/edit" element={<EditSekolah />} />
+            <Route path="/rkas" element={<Rkas />} />
+            <Route path="/bku" element={<Bku />} />
+            <Route path="/kwitansi" element={<Kwitansi />} />
+            <Route path="/cetak" element={<Cetak />} />
+            <Route path="/settings" element={<Settings />} />
+          </Route>
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
+  );
+}
