@@ -1,19 +1,6 @@
-import express from 'express';
-import path from 'path';
-import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
-import { createServer as createViteServer } from 'vite';
 
-dotenv.config();
-
-const app = express();
-const PORT = 3000;
-
-// Set up JSON body parser with generous limit for PDF uploads
-app.use(express.json({ limit: '20mb' }));
-app.use(express.urlencoded({ limit: '20mb', extended: true }));
-
-// Initialize Google GenAI securely on the server
+// Initialize AI Client lazily to prevent serverless boot timeout crashes
 let aiClient: GoogleGenAI | null = null;
 function getAiClient(): GoogleGenAI {
   if (!aiClient) {
@@ -23,20 +10,32 @@ function getAiClient(): GoogleGenAI {
     }
     aiClient = new GoogleGenAI({
       apiKey: key,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
     });
   }
   return aiClient;
 }
 
-// API endpoint for parsing RKAS yearly PDF with Gemini
-app.post('/api/parse-rkas', async (req, res) => {
+export default async function handler(req: any, res: any) {
+  // CORS configuration headers for flexibility
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
+  );
+
+  // Return immediately for preflight OPTIONS requests
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ success: false, message: 'Method Not Allowed' });
+  }
+
   try {
-    const { pdfBase64, filename } = req.body;
+    const { pdfBase64, filename } = req.body || {};
     if (!pdfBase64) {
       return res.status(400).json({ success: false, message: 'PDF base64 data is required' });
     }
@@ -110,32 +109,9 @@ app.post('/api/parse-rkas', async (req, res) => {
     }
 
     const parsedData = JSON.parse(textOutput);
-    return res.json({ success: true, data: parsedData });
+    return res.status(200).json({ success: true, data: parsedData });
   } catch (error: any) {
     console.error('Error parsing RKAS with Gemini:', error);
     return res.status(500).json({ success: false, message: error.message || 'Internal server error while parsing the PDF' });
   }
-});
-
-// Configure Vite middleware in development or static hosting in production
-async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-  }
-
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[SIAP BOS] Server listening on http://localhost:${PORT}`);
-  });
 }
-
-startServer();

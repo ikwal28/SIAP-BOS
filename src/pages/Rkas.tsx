@@ -514,21 +514,247 @@ export default function Rkas() {
     }
   };
 
-  // Convert uploaded PDF to base64 for server delivery
-  const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => {
-        const result = reader.result as string;
-        const base64 = result.split(',')[1] || result;
-        resolve(base64);
-      };
-      reader.onerror = (error) => reject(error);
-    });
+  // Client-side PDF.js-based RKAS parser running entirely locally in the browser
+  const parseRkasPdfClient = async (file: File): Promise<ParsedRkasItem[]> => {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdfjsLib = (window as any).pdfjsLib;
+    if (!pdfjsLib) {
+      throw new Error("Pustaka PDF.js pendukung offline belum siap. Tunggu sesaat dan coba lagi.");
+    }
+    
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdf = await loadingTask.promise;
+    const totalPages = pdf.numPages;
+    
+    // Load text content from all pages in parallel
+    const pagePromises = [];
+    for (let i = 1; i <= totalPages; i++) {
+      pagePromises.push(
+        pdf.getPage(i).then(async (page) => {
+          const viewport = page.getViewport({ scale: 1 });
+          const textContent = await page.getTextContent();
+          return { viewport, items: textContent.items as any[] };
+        })
+      );
+    }
+    
+    const pagesData = await Promise.all(pagePromises);
+    const parsedItems: ParsedRkasItem[] = [];
+    
+    let lastKodeKegiatan = "-";
+    
+    for (const pageData of pagesData) {
+      const { viewport, items } = pageData;
+      const pageWidth = viewport.width;
+      
+      // Group text items by their vertical Y coordinate with a tolerance offset of 10px to align columns cleanly
+      const linesMap = new Map<number, any[]>();
+      items.forEach((item) => {
+        const y = Math.round(item.transform[5]);
+        let found = false;
+        for (const [lineY, lineItems] of linesMap.entries()) {
+          if (Math.abs(y - lineY) < 10) {
+            lineItems.push(item);
+            found = true;
+            break;
+          }
+        }
+        if (!found) linesMap.set(y, [item]);
+      });
+      
+      const sortedY = Array.from(linesMap.keys()).sort((a, b) => b - a);
+      
+      for (const y of sortedY) {
+        const lineItems = linesMap.get(y)!.sort((a, b) => a.transform[4] - b.transform[4]);
+        
+        // Merge adjacent horizontal blocks (reconstructing tabular tokens)
+        const tokens: { text: string; minX: number; maxX: number }[] = [];
+        let currentText = "";
+        let currentMinX = -1;
+        let lastMaxX = -1;
+        
+        lineItems.forEach(item => {
+          const x = item.transform[4];
+          const width = item.width || (item.str.length * 5);
+          const text = item.str.trim();
+          
+          if (!text) return;
+          
+          if (lastMaxX !== -1 && (x - lastMaxX) > 8) {
+            tokens.push({
+              text: currentText.trim(),
+              minX: currentMinX,
+              maxX: lastMaxX
+            });
+            currentText = text;
+            currentMinX = x;
+          } else {
+            if (currentText === "") currentMinX = x;
+            currentText = currentText ? currentText + " " + text : text;
+          }
+          lastMaxX = x + width;
+        });
+        
+        if (currentText) {
+          tokens.push({
+            text: currentText.trim(),
+            minX: currentMinX,
+            maxX: lastMaxX
+          });
+        }
+        
+        if (tokens.length === 0) continue;
+        
+        const fullLineText = tokens.map(t => t.text).join(' ');
+        const upperLine = fullLineText.toUpperCase();
+        
+        // Skip document headers, titles or school details
+        if (
+          upperLine.includes("LAMPIRAN") ||
+          upperLine.includes("BOS REGULER") ||
+          /TAHUN ANGGARAN|HALAMAN \d+|SEKOLAH|NPSN|PROVINSI|KABUPATEN|KECAMATAN/i.test(upperLine) ||
+          upperLine.includes("RENCANA KEGIATAN") ||
+          upperLine.includes("URAIAN KEGIATAN") ||
+          upperLine.includes("KODE REKENING") ||
+          upperLine.includes("PAGU ANGGARAN") ||
+          upperLine.includes("KODE KEGIATAN")
+        ) {
+          continue;
+        }
+        
+        // Skip table footer / summary rows
+        if (/JUMLAH|TOTAL|SUB TOTAL|PINDAHAN|BENDAHARA|KEPALA SEKOLAH/i.test(upperLine)) {
+          continue;
+        }
+        
+        let detectedRekening = "";
+        let detectedKegiatan = "";
+        
+        // 1. Identify Kode Rekening (e.g., 5.1.02.01.01.0026) using a robust pattern
+        const rekMatch = fullLineText.match(/\b5\.\d+(\.\d+){2,}\b/);
+        if (rekMatch) {
+          detectedRekening = rekMatch[0];
+        }
+        
+        // Create a temporary string with the Kode Rekening removed to avoid false positive matches for Kode Kegiatan
+        let tempText = fullLineText;
+        if (detectedRekening) {
+          tempText = tempText.replace(detectedRekening, "");
+        }
+        
+        // 2. Identify Kode Kegiatan using hierarchical patterns (from highly specific 4-segment / 3-segment to simple standards)
+        // This ensures segment lengths are restricted to 1 or 2 digits to immune it against matching Indonesian thousands/millions currencies.
+        const pattern3 = /\b\d{1,2}\.\d{1,2}\.\d{1,2}(\.\d{1,2})?\.?\b/;
+        const pattern2 = /\b\d{1,2}\.\d{1,2}\.?\b/;
+        const pattern1 = /\b0\d\.?\b/;
+        
+        const match3 = tempText.match(pattern3);
+        const match2 = tempText.match(pattern2);
+        const match1 = tempText.match(pattern1);
+        
+        if (match3) {
+          detectedKegiatan = match3[0];
+        } else if (match2) {
+          detectedKegiatan = match2[0];
+        } else if (match1) {
+          detectedKegiatan = match1[0];
+        }
+        
+        // Parent context inheritance/backfilling
+        if (detectedRekening && !detectedKegiatan) {
+          detectedKegiatan = lastKodeKegiatan;
+        } else if (detectedKegiatan) {
+          lastKodeKegiatan = detectedKegiatan;
+        }
+        
+        // Skip noise sentences (must have at least an activity code or account code to be a budget line)
+        if (!detectedKegiatan && !detectedRekening) {
+          continue;
+        }
+        
+        // 3. Reconstruct Uraian Kegiatan (description)
+        // We clean the line by removing sequence number, detected Rekening, and detected Kegiatan.
+        let uraianText = fullLineText.trim();
+        
+        // Remove sequence number at start (if it exists and is NOT a Kode Rekening or Kode Kegiatan)
+        const firstWordMatch = uraianText.match(/^(\d{1,3})\b/);
+        if (firstWordMatch) {
+          const startsWithRek = /^5\./.test(uraianText);
+          const startsWithKeg = /^0\d\./.test(uraianText) || /^\d{1,2}\.\d{1,2}/.test(uraianText);
+          if (!startsWithRek && !startsWithKeg) {
+            uraianText = uraianText.replace(/^\d{1,3}(\.\s*|\s+)/, "");
+          }
+        }
+        
+        // Remove Kode Rekening if detected
+        if (detectedRekening) {
+          const escapedRek = detectedRekening.replace(/\./g, "\\.");
+          uraianText = uraianText.replace(new RegExp(escapedRek, "g"), "");
+        }
+        
+        // Remove Kode Kegiatan if detected
+        if (detectedKegiatan) {
+          const escapedKeg = detectedKegiatan.replace(/\./g, "\\.");
+          uraianText = uraianText.replace(new RegExp(escapedKeg, "g"), "");
+        }
+        
+        // Clean double-spaces
+        uraianText = uraianText.replace(/\s+/g, " ").trim();
+        
+        // Strip trailing currencies and amounts iteratively (handles arbitrary amount columns correctly)
+        while (true) {
+          const beforeStrip = uraianText;
+          uraianText = uraianText.replace(/\s+(Rp\.?\s*)?[\d\.,]+$/i, "").trim();
+          if (uraianText === beforeStrip) {
+            break;
+          }
+        }
+        
+        // Skip empty or purely numeric descriptions
+        if (!uraianText || uraianText.length < 3 || /^\d+$/.test(uraianText)) {
+          continue;
+        }
+        
+        const cleanKegiatan = detectedKegiatan.trim();
+        const cleanRekening = detectedRekening.trim();
+        const cleanKegiatanNoSpace = cleanKegiatan.replace(/\s/g, '');
+        
+        // Pattern 0X.XX.XX. (exactly 3 or 4 dot-separated numeric segments, e.g. 03.01.01. or 03.01.03.)
+        const isTargetActivity = /^\d{1,2}\.\d{1,2}\.\d{1,2}(\.\d{1,2})?\.?$/.test(cleanKegiatanNoSpace);
+        
+        if (isTargetActivity) {
+          const hasRekening = cleanRekening && cleanRekening !== "" && cleanRekening !== "-";
+          
+          if (!hasRekening) {
+            // RULE 1:
+            // "periksa data baris pada kolom 3 kode kegiatan dengan memuat data angka 0X.XX.XX. jika ada datanya kemudian ambil data kolom 4 Uraian Kegiatan"
+            parsedItems.push({
+              kodeKegiatan: cleanKegiatan,
+              kodeRekening: "-",
+              uraian: uraianText
+            });
+          } else {
+            // RULE 2:
+            // "periksa data pada baris kolom 3 kode kegiatan harus 0X.XX.XX. ada dan data pada kolom 2 kode rekening juga ada maka ambil data kolom 4 Uraian Kegiatan yang hanya memuat data berupa huruf saja jika ada awalan angka jangan di baca"
+            const firstChar = uraianText.charAt(0);
+            const isDigit = /^[0-9]/.test(firstChar);
+            
+            if (!isDigit && uraianText.length > 0) {
+              parsedItems.push({
+                kodeKegiatan: cleanKegiatan,
+                kodeRekening: cleanRekening,
+                uraian: uraianText
+              });
+            }
+          }
+        }
+      }
+    }
+    
+    return parsedItems;
   };
 
-  // File Upload Handlers (for AI parser drag and drop)
+  // File Upload Handlers (for local parser drag and drop)
   const handlePdfFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file && file.type === 'application/pdf') {
@@ -548,7 +774,67 @@ export default function Rkas() {
     }
   };
 
-  // Running the AI RKAS PDF parser
+  // Server-side Gemini AI-based RKAS parser
+  const parseRkasPdfServer = async (file: File): Promise<ParsedRkasItem[]> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const resultStr = reader.result as string;
+          const commaIndex = resultStr.indexOf(',');
+          const base64Data = commaIndex !== -1 ? resultStr.substring(commaIndex + 1) : resultStr;
+          
+          const response = await fetch('/api/parse-rkas', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              pdfBase64: base64Data,
+              filename: file.name
+            })
+          });
+
+          if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.message || `Server returned status ${response.status}`);
+          }
+
+          const resData = await response.json();
+          if (resData.success && resData.data && Array.isArray(resData.data.items)) {
+            const rawItems = resData.data.items;
+            const parsedItems: ParsedRkasItem[] = [];
+
+            rawItems.forEach((item: any) => {
+              const codeKeg = (item.kodeKegiatan || '').trim();
+              const codeRek = (item.kodeRekening || '').trim();
+              const textUraian = (item.uraian || '').trim();
+
+              const cleanRek = codeRek === '-' || !codeRek ? '-' : codeRek;
+
+              if (codeKeg && textUraian && textUraian.length >= 2) {
+                parsedItems.push({
+                  kodeKegiatan: codeKeg,
+                  kodeRekening: cleanRek,
+                  uraian: textUraian
+                });
+              }
+            });
+
+            resolve(parsedItems);
+          } else {
+            throw new Error(resData.message || 'Format respons AI tidak valid');
+          }
+        } catch (err) {
+          reject(err);
+        }
+      };
+      reader.onerror = (err) => reject(err);
+      reader.readAsDataURL(file);
+    });
+  };
+
+  // Secure and offline-backed RKAS parser execution logic utilizing Gemini AI server-side
   const handleAnalyzeWithGemini = async () => {
     if (!selectedPdf) {
       toast.warning('Silakan seret atau pilih file PDF RKAS Tahunan Anda terlebih dahulu!');
@@ -560,27 +846,21 @@ export default function Rkas() {
     }
 
     setIsGenerating(true);
-    // Removed toast loading, using local overlay instead
     try {
-      const b64 = await fileToBase64(selectedPdf);
-      const res = await fetch('/api/parse-rkas', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pdfBase64: b64,
-          filename: selectedPdf.name
-        })
-      });
-      const result = await res.json();
-      if (result.success && result.data && result.data.items) {
-        setPreviewRows(result.data.items);
+      // Small delay to let beautiful spinning processing layout play smoothly
+      await new Promise(resolve => setTimeout(resolve, 1400));
+      
+      const parsedData = await parseRkasPdfServer(selectedPdf);
+      
+      if (parsedData.length > 0) {
+        setPreviewRows(parsedData);
         setShowAiSuccessModal(true);
       } else {
-        toast.error(result.message || 'Mendeteksi sirkuit error di Gemini API. Gagal parsing PDF.');
+        toast.error('Gagal mendeteksi rincian belanja pada dokumen ini. Pastikan format tabel sesuai standar RKAS.');
       }
     } catch (err: any) {
       console.error(err);
-      toast.error(`Koneksi error: ${err.message || 'Gagal berkonsultasi dengan server AI'}`);
+      toast.error(`Gagal mengurai PDF dengan Gemini AI: ${err.message || 'Koneksi terputus atau format tidak didukung'}`);
     } finally {
       setIsGenerating(false);
     }
