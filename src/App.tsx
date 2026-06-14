@@ -16,6 +16,11 @@ import Rkas from './pages/Rkas';
 import Bku from './pages/Bku';
 import Kwitansi from './pages/Kwitansi';
 import Cetak from './pages/Cetak';
+import SuratPemesanan from './pages/SuratPemesanan';
+import Nota from './pages/Nota';
+import BeritaAcara from './pages/BeritaAcara';
+import PerjalananDinas from './pages/PerjalananDinas';
+import Honorarium from './pages/Honorarium';
 import NotFound from './pages/NotFound';
 import AppLayout from './layouts/AppLayout';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -41,6 +46,11 @@ export default function App() {
             <Route path="/bku" element={<Bku />} />
             <Route path="/kwitansi" element={<Kwitansi />} />
             <Route path="/cetak" element={<Cetak />} />
+            <Route path="/sp" element={<SuratPemesanan />} />
+            <Route path="/nota" element={<Nota />} />
+            <Route path="/bast" element={<BeritaAcara />} />
+            <Route path="/spd" element={<PerjalananDinas />} />
+            <Route path="/honor" element={<Honorarium />} />
             <Route path="/settings" element={<Settings />} />
           </Route>
           <Route path="*" element={<NotFound />} />

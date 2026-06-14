@@ -729,15 +729,18 @@ function importData(data) {
     sheet.clear();
     sheet.getRange("A1").setValue("RKAS BERDASARKAN TAHAPAN TAHUN " + data.tahun).setFontWeight("bold").setFontSize(12);
     sheet.getRange("A2").setValue("Sekolah: " + data.sekolah);
-    sheet.getRange("A5:G5").setValues([["KODE REKENING", "KODE KEGIATAN / KODE PROGRAM", "URAIAN KEGIATAN", "VOLUME", "SATUAN", "TARIF HARGA", "JUMLAH"]]).setFontWeight("bold").setBackground("#cbd5e1");
-    sheet.getRange("A6:B1000").setNumberFormat("@");
+    sheet.getRange("A5:J5").setValues([["No", "Kode Rekening", "Kode Kegiatan", "Uraian", "Tahap 1 (%)", "Tahap 2 (%)", "Volume", "Satuan", "Harga Satuan", "Jumlah"]]).setFontWeight("bold").setBackground("#cbd5e1");
+    sheet.getRange("B6:C1000").setNumberFormat("@");
     
     if (data.rows && data.rows.length > 0) {
       data.rows.forEach(function(row, idx) {
         sheet.appendRow([
+          idx + 1, 
           row.kodeRekening || "", 
           row.kodeKegiatan || "", 
           row.uraian || "", 
+          row.porsiTahap1 || 0,
+          row.porsiTahap2 || 0,
           row.volume || "",
           row.satuan || "",
           row.tarifHarga || "",
@@ -1065,28 +1068,31 @@ function getImportedData(data) {
     
     for (let i = 5; i < rows.length; i++) {
       const row = rows[i];
-      if (row[3] === "TOTAL ANGGARAN" || (!row[0] && !row[1] && !row[2])) continue;
+      if (row[3] === "TOTAL ANGGARAN" || (!row[1] && !row[2])) continue;
       
-      let reqKode = row[0];
-      if (reqKode instanceof Date) reqKode = displayValues[i][0];
+      let reqKode = row[1];
+      if (reqKode instanceof Date) reqKode = displayValues[i][1];
       else reqKode = String(reqKode || "");
       
-      let kegKode = row[1];
-      if (kegKode instanceof Date) kegKode = displayValues[i][1];
+      let kegKode = row[2];
+      if (kegKode instanceof Date) kegKode = displayValues[i][2];
       else kegKode = String(kegKode || "");
+      
+      let p1 = parseFloat(row[4]) || 0;
+      let p2 = parseFloat(row[5]) || 0;
       
       results.push({
         id: "phased_" + i,
         kodeRekening: reqKode,
         kodeKegiatan: kegKode,
-        uraian: String(row[2] || ""),
-        porsiTahap1: 50, // default
-        porsiTahap2: 50, // default
-        tahap: "both",
-        volume: String(row[3] || ""),
-        satuan: String(row[4] || ""),
-        tarifHarga: String(row[5] || ""),
-        jumlah: String(row[6] || "")
+        uraian: String(row[3] || ""),
+        porsiTahap1: p1,
+        porsiTahap2: p2,
+        tahap: (p1 > 0 && p2 > 0) ? "both" : (p1 > 0 ? "1" : "2"),
+        volume: String(row[6] || ""),
+        satuan: String(row[7] || ""),
+        tarifHarga: String(row[8] || ""),
+        jumlah: String(row[9] || "")
       });
     }
   } else {
@@ -1270,33 +1276,23 @@ function checkBkuMonths(data) {
   
   const fileName = "SIAP_BOS_" + data.tahun;
   const files = dataSekolahFolder.getFilesByName(fileName);
-  if (!files.hasNext()) return { success: true, months: [], totals: {} };
+  if (!files.hasNext()) return { success: true, months: [] };
   
   const file = files.next();
   const ss = SpreadsheetApp.openById(file.getId());
   const sheets = ss.getSheets();
   const monthsWithData = [];
-  const totals = {};
   
   sheets.forEach(function(sheet) {
     const name = sheet.getName();
     if (name.indexOf("BKU ") === 0) {
-      const monthRaw = name.substring(4).toUpperCase(); // e.g. "JANUARI"
-      const monthProper = monthRaw.charAt(0) + monthRaw.substring(1).toLowerCase();
+      const month = name.substring(4); // e.g. "JANUARI"
       const lastRow = sheet.getLastRow();
       if (lastRow > 5) {
-        monthsWithData.push(monthProper);
-        
-        // Performance optimization: get all credit values at once
-        const values = sheet.getRange(6, 6, lastRow - 5, 1).getValues();
-        let monthTotal = 0;
-        for (let i = 0; i < values.length; i++) {
-          monthTotal += parseFloat(values[i][0] || 0);
-        }
-        totals[monthProper] = monthTotal;
+        monthsWithData.push(month.charAt(0) + month.substring(1).toLowerCase()); // e.g. "Januari"
       }
     }
   });
   
-  return { success: true, months: monthsWithData, totals: totals };
+  return { success: true, months: monthsWithData };
 }

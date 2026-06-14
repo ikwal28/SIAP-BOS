@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Users, FolderKanban, Settings, LogOut, Menu, AlertCircle, Layers, BookOpen, Receipt, Printer } from 'lucide-react';
+import { LayoutDashboard, Users, FolderKanban, Settings, LogOut, Menu, AlertCircle, Layers, BookOpen, Receipt, Printer, FileText, ClipboardCheck, Milestone, Award } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
 import ConfirmModal from '../components/ConfirmModal';
@@ -96,7 +96,18 @@ export default function AppLayout() {
   const groupFitur = isSchoolAdmin ? [
     { name: 'RKAS', icon: Layers, path: '/rkas' },
     { name: 'BKU', icon: BookOpen, path: '/bku' },
-    { name: 'KWITANSI', icon: Receipt, path: '/kwitansi' },
+    { name: 'KWITANSI', icon: Receipt, path: '/kwitansi' }
+  ] : [];
+
+  const groupPendukung = isSchoolAdmin ? [
+    { name: 'Surat Pemesanan', icon: FileText, path: '/sp' },
+    { name: 'Berita Acara', icon: ClipboardCheck, path: '/bast' },
+    { name: 'Nota Belanja', icon: Receipt, path: '/nota' },
+    { name: 'Transport / Dinas', icon: Milestone, path: '/spd' },
+    { name: 'Honorarium', icon: Award, path: '/honor' }
+  ] : [];
+
+  const groupCetak = isSchoolAdmin ? [
     { name: 'CETAK', icon: Printer, path: '/cetak' }
   ] : [];
 
@@ -140,9 +151,11 @@ export default function AppLayout() {
           {!collapsed && <h1 className="font-bold text-xl dark:text-white truncate">SIAP BOS</h1>}
           <button onClick={() => setCollapsed(!collapsed)} className="p-1 min-w-[32px] hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"><Menu className="dark:text-white w-full" /></button>
         </div>
-        <nav className="p-4 space-y-4 flex-1">
+        <nav className="p-4 space-y-4 flex-1 overflow-y-auto">
           {renderNavGroup('Utama', groupUtama)}
-          {renderNavGroup('Fitur SIAP BOS', groupFitur)}
+          {renderNavGroup('DATA UTAMA SIAP BOS', groupFitur)}
+          {renderNavGroup('Dokumen Pendukung', groupPendukung)}
+          {renderNavGroup('Cetak Siap Bos', groupCetak)}
           {renderNavGroup('Pengaturan', groupPengaturan)}
         </nav>
         <div className="p-4 border-t border-gray-200 dark:border-gray-700">

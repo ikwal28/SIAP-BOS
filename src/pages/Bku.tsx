@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { 
   BookOpen, Database, Upload, Plus, Trash2, 
   ExternalLink, RefreshCw, Calendar, FileSpreadsheet, Play, Info,
-  CheckSquare, X, FileText, AlertTriangle, CheckCircle
+  CheckSquare, X, FileText, AlertTriangle, CheckCircle, Edit, Save
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -27,8 +27,13 @@ interface GeneratedDatabase {
 
 const formatValueIfDate = (val: any, isDateColumn: boolean): string => {
   if (val === null || val === undefined) return '';
-  const str = String(val).trim();
+  let str = String(val).trim();
   if (str === '') return '';
+  
+  // Clean parenthesized timezone strings like '(Waktu Indochina)' or '(Coordinated Universal Time)'
+  if (str.includes('(')) {
+    str = str.split('(')[0].trim();
+  }
   
   // 1. Check if it's a standard JS Date object string or contains timezone
   const isDateObjectString = str.includes('GMT') || str.includes('UTC') || /^[A-Za-z]{3}\s[A-Za-z]{3}\s\d+/.test(str);
@@ -41,7 +46,7 @@ const formatValueIfDate = (val: any, isDateColumn: boolean): string => {
       const yyyy = d.getFullYear();
       
       if (isDateColumn) {
-        return `${dd}-${mm}-${yyyy}`;
+        return `${dd}/${mm}/${yyyy}`;
       } else {
         const zz = String(yyyy % 100).padStart(2, '0');
         return `${dd}.${mm}.${zz}.`;
@@ -58,7 +63,7 @@ const formatValueIfDate = (val: any, isDateColumn: boolean): string => {
       const yyyy = d.getFullYear();
       
       if (isDateColumn) {
-        return `${dd}-${mm}-${yyyy}`;
+        return `${dd}/${mm}/${yyyy}`;
       } else {
         const zz = String(yyyy % 100).padStart(2, '0');
         return `${dd}.${mm}.${zz}.`;
@@ -66,10 +71,10 @@ const formatValueIfDate = (val: any, isDateColumn: boolean): string => {
     }
   }
 
-  // 3. Normalize existing date formats (converting slash to hyphen)
+  // 3. Normalize existing date formats (converting hyphen to slash)
   if (isDateColumn) {
     if (/^\d{1,2}[-\/]\d{1,2}[-\/]\d{4}$/.test(str)) {
-      return str.replace(/\//g, '-');
+      return str.replace(/-/g, '/');
     }
   } else {
     if (/^\d{1,2}\.\d{1,2}\.\d{1,2}\.?$/.test(str)) {
@@ -112,6 +117,35 @@ export default function Bku() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showDeleteSuccess, setShowDeleteSuccess] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Kode Kegiatan & Kode Rekening editing states
+  const [isEditingCodes, setIsEditingCodes] = useState(false);
+  const [originalRows, setOriginalRows] = useState<DataRow[]>([]);
+
+  const hasChanges = rows.some((row, idx) => {
+    const orig = originalRows[idx];
+    if (!orig) return false;
+    return row.kodeKegiatan !== orig.kodeKegiatan || row.kodeRekening !== orig.kodeRekening;
+  });
+
+  const handleCancelEditKode = () => {
+    setRows(originalRows.map(r => ({ ...r })));
+    setIsEditingCodes(false);
+  };
+
+  const handleEditKodeClick = async () => {
+    if (!isEditingCodes) {
+      setOriginalRows(rows.map(r => ({ ...r })));
+      setIsEditingCodes(true);
+    } else {
+      if (!hasChanges) {
+        setRows(originalRows.map(r => ({ ...r })));
+        setIsEditingCodes(false);
+      } else {
+        await handleSaveData();
+      }
+    }
+  };
 
   // Modern action status and detection alert modals
   const [dbActionStatus, setDbActionStatus] = useState<{
@@ -192,6 +226,7 @@ export default function Bku() {
       }
     } catch (err) {
       console.error("Error checking BKU months:", err);
+      toast.error("Layanan BKU saat ini sedang tidak tersedia. Mohon periksa koneksi atau coba sesaat lagi.");
     }
   };
 
@@ -274,7 +309,13 @@ export default function Bku() {
       if (cached) {
         try {
           const parsed = JSON.parse(cached);
-          setRows(parsed);
+          const formatted = parsed.map((row: any) => ({
+            ...row,
+            tanggal: formatValueIfDate(row.tanggal, true),
+            kodeKegiatan: String(row.kodeKegiatan || '').replace(/\s+/g, ''),
+            kodeRekening: String(row.kodeRekening || '').replace(/\s+/g, ''),
+          }));
+          setRows(formatted);
           return;
         } catch (e) {}
       }
@@ -296,8 +337,8 @@ export default function Bku() {
         const cleanedRows = data.rows.map((row: any) => ({
           ...row,
           tanggal: formatValueIfDate(row.tanggal, true),
-          kodeKegiatan: String(row.kodeKegiatan || '').trim(),
-          kodeRekening: String(row.kodeRekening || '').trim(),
+          kodeKegiatan: String(row.kodeKegiatan || '').replace(/\s+/g, ''),
+          kodeRekening: String(row.kodeRekening || '').replace(/\s+/g, ''),
         }));
         setRows(cleanedRows);
         sessionStorage.setItem(cacheKey, JSON.stringify(cleanedRows));
@@ -411,12 +452,26 @@ export default function Bku() {
 
   const updateRowValue = (idx: number, key: keyof DataRow, val: string) => {
     const nextArr = [...rows];
-    nextArr[idx] = { ...nextArr[idx], [key]: val };
+    let cleanedVal = val;
+    if (key === 'kodeKegiatan' || key === 'kodeRekening') {
+      cleanedVal = val.replace(/\s+/g, '');
+    }
+    nextArr[idx] = { ...nextArr[idx], [key]: cleanedVal };
     setRows(nextArr);
   };
 
   // Compute Balances dynamically
   const totalKredit = rows.reduce((sum, row) => sum + (parseFloat(row.kredit) || 0), 0);
+
+  const totalBpuInternal = rows.reduce((sum, row) => {
+    const isBpu = /^BPU/i.test((row.bukti || '').trim());
+    return isBpu ? sum + (parseFloat(row.kredit) || 0) : sum;
+  }, 0);
+
+  const totalBnuInternal = rows.reduce((sum, row) => {
+    const isBnu = /^BNU/i.test((row.bukti || '').trim());
+    return isBnu ? sum + (parseFloat(row.kredit) || 0) : sum;
+  }, 0);
 
   const availableYears = Array.from(
     new Set(
@@ -801,11 +856,107 @@ export default function Bku() {
             else if (col === "penerimaan") rowPenerimaan += (rowPenerimaan ? " " : "") + txt;
           });
           
+          // Content-aware calibration & repairs:
+          // Often PDF text coordinates are slightly shifted. We can find block text patterns
+          // and re-verify candidates for Kode Rekening or Kode Kegiatan.
+          let cleanRekening = rowRekening.replace(/\s+/g, '').trim();
+          let cleanKegiatan = rowKegiatan.replace(/\s+/g, '').trim();
+
+          const isCompleteRekening = (s: string) => /^5\.\d+(?:\.\d+)+$/.test(s);
+          const isCompleteKegiatan = (s: string) => /^\d\.\d+(?:\.\d+)+$/.test(s);
+
+          // Advanced extraction sub-functions for high-precision
+          const getAccountPattern = (s: string): string => {
+            const stripped = s.replace(/\s+/g, '').trim();
+            // Look for any 5.X.XX... pattern inside
+            const match = stripped.match(/(5\.\d+(?:\.\d+)+)/);
+            if (match) return match[1];
+            // Fallback: any other pattern with at least 3 dots
+            const generalMatch = stripped.match(/(\d\.\d+(?:\.\d+){3,})/);
+            if (generalMatch) return generalMatch[1];
+            return "";
+          };
+
+          const getActivityPattern = (s: string): string => {
+            const stripped = s.replace(/\s+/g, '').trim();
+            // Skip account codes
+            if (stripped.startsWith("5.") && stripped.split('.').length > 3) return "";
+            const match = stripped.match(/^(\d\.\d+(?:\.\d+)*)/);
+            if (match) return match[1];
+            return "";
+          };
+
+          let foundDate = "";
+          let foundRekening = "";
+          let foundKegiatan = "";
+
+          blocks.forEach(b => {
+            const txt = b.text.trim();
+            const cleanTxt = txt.replace(/\s+/g, '');
+            // 1. Detect standard Indonesian BKU date format (e.g. DD/MM/YYYY)
+            if (/^\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}$/.test(cleanTxt)) {
+              foundDate = cleanTxt;
+            }
+            // 2. Scan block text for any viable Account Code (Kode Rekening)
+            const matchedRek = getAccountPattern(txt);
+            if (matchedRek && matchedRek.length > foundRekening.length) {
+              foundRekening = matchedRek;
+            }
+            // 3. Scan block text for any viable Activity Code (Kode Kegiatan)
+            const matchedKeg = getActivityPattern(txt);
+            if (matchedKeg && matchedKeg.length > foundKegiatan.length) {
+              foundKegiatan = matchedKeg;
+            }
+          });
+
+          if (foundDate) {
+            rowTanggal = foundDate;
+          }
+
+          // Apply recovered values if they are more complete than column-mapped values
+          const curRekPattern = getAccountPattern(cleanRekening);
+          if (curRekPattern && curRekPattern.length >= cleanRekening.length) {
+            cleanRekening = curRekPattern;
+          }
+          if (foundRekening && (!cleanRekening || !isCompleteRekening(cleanRekening))) {
+            cleanRekening = foundRekening;
+          }
+
+          const curKegPattern = getActivityPattern(cleanKegiatan);
+          if (curKegPattern && curKegPattern.length >= cleanKegiatan.length) {
+            cleanKegiatan = curKegPattern;
+          }
+          if (foundKegiatan && (!cleanKegiatan || !isCompleteKegiatan(cleanKegiatan))) {
+            cleanKegiatan = foundKegiatan;
+          }
+
+          // Re-align swapped values (e.g. if kegiatan received the account code, we swap them)
+          if (cleanKegiatan && getAccountPattern(cleanKegiatan) && !getAccountPattern(cleanRekening)) {
+            const temp = cleanRekening;
+            cleanRekening = cleanKegiatan;
+            cleanKegiatan = temp;
+          }
+          if (cleanRekening && getActivityPattern(cleanRekening) && !getActivityPattern(cleanKegiatan) && !cleanRekening.startsWith("5.")) {
+            const temp = cleanRekening;
+            cleanRekening = cleanKegiatan;
+            cleanKegiatan = temp;
+          }
+
+          rowRekening = cleanRekening.replace(/\s+/g, '');
+          rowKegiatan = cleanKegiatan.replace(/\s+/g, '');
+
+          // Carrying over date if empty (important for merged spreadsheet layout in PDFs)
+          let hasTanggal = rowTanggal.trim() !== '';
+          if (!hasTanggal && lastTransaction) {
+            rowTanggal = lastTransaction.tanggal;
+            hasTanggal = true;
+          }
+          
           // 5. Normalize Bukti voucher code and description beautifully
           let finalNoBukti = rowBukti.replace(/\s+/g, ' ').trim();
           let finalUraian = rowUraian.replace(/\s+/g, ' ').trim();
           
-          const bpuMatch = finalNoBukti.match(/\b((?:BPU|BK|KK|KKT|PND|NPD|NP|PYD)[\w-]*)\b/i);
+          const bpuMatch = finalNoBukti.match(/\b((?:BPU|BNU|BK|KK|KKT|PND|NPD|NP|PYD)[\w-]*)\b/i);
           if (bpuMatch) {
             const actualBukti = bpuMatch[1];
             const restOfBukti = finalNoBukti.replace(actualBukti, '').trim();
@@ -824,7 +975,9 @@ export default function Bku() {
           }
           
           // If finalNoBukti is not a valid voucher code (must contain a digit and not be a standard description word), treat it as part of Uraian
-          const isBuktiVoucherValid = finalNoBukti.trim() !== '' && /\d/.test(finalNoBukti) && !/SETOR|PAJAK|TUNAI|BANK|JUMLAH|PINDAHAN|MUTASI|SALDO|SUBTOTAL|TOTAL|LAPTOP/i.test(finalNoBukti);
+          const isBuktiVoucherValid = finalNoBukti.trim() !== '' && 
+            (/\d/.test(finalNoBukti) || /^(?:BPU|BNU|BK|KK|KKT|PND|NPD|NP|PYD)/i.test(finalNoBukti.trim())) && 
+            !/SETOR|PAJAK|TUNAI|BANK|JUMLAH|PINDAHAN|MUTASI|SALDO|SUBTOTAL|TOTAL|LAPTOP/i.test(finalNoBukti);
           
           if (!isBuktiVoucherValid && finalNoBukti.trim() !== '') {
             finalUraian = (finalNoBukti + " " + finalUraian).trim();
@@ -832,9 +985,8 @@ export default function Bku() {
           }
           
           // Ensure we have valid data for required columns and Pengeluaran (Column 7) has a positive parsed currency amount
-          const hasTanggal = rowTanggal.trim() !== '';
-          const hasKegiatan = rowKegiatan.trim() !== '' && /[\d\.]/.test(rowKegiatan);
-          const hasRekening = rowRekening.trim() !== '' && /[\d\.]/.test(rowRekening);
+          const hasKegiatan = true; // Non-strict kegiatan code to allow non-program or tax items
+          const hasRekening = true; // Non-strict account code to prevent dropping any valid lines
           const hasBukti = finalNoBukti.trim() !== '';
           const hasUraian = finalUraian.trim() !== '';
           
@@ -847,27 +999,27 @@ export default function Bku() {
             
             if (rawDate) {
               try {
-                const cleanDate = rawDate.replace(/\s+/g, '').replace(/[/.]/g, '-');
-                const parts = cleanDate.split('-');
+                const cleanDate = rawDate.replace(/\s+/g, '').replace(/[-.]/g, '/');
+                const parts = cleanDate.split('/');
                 if (parts.length === 3) {
                   let d = parts[0].padStart(2, '0');
                   let m = parts[1].padStart(2, '0');
                   let y = parts[2];
                   if (y.length === 2) y = '20' + y;
-                  normalizedDate = `${d}-${m}-${y}`;
+                  normalizedDate = `${d}/${m}/${y}`;
                 }
               } catch (e) {}
             }
             
             if (!normalizedDate) {
               const monthIdxString = String(months.indexOf(activeMonth) + 1).padStart(2, '0');
-              normalizedDate = `01-${monthIdxString}-${activeYear}`;
+              normalizedDate = `01/${monthIdxString}/${activeYear}`;
             }
             
             const transaction: DataRow = {
               tanggal: normalizedDate,
-              kodeKegiatan: rowKegiatan.trim(),
-              kodeRekening: rowRekening.trim(),
+              kodeKegiatan: rowKegiatan.trim() || "-",
+              kodeRekening: rowRekening.trim() || "-",
               bukti: finalNoBukti.trim(),
               keterangan: finalUraian.trim(),
               debit: "0",
@@ -886,8 +1038,8 @@ export default function Bku() {
       ).map(tx => ({
         ...tx,
         tanggal: formatValueIfDate(tx.tanggal, true),
-        kodeKegiatan: String(tx.kodeKegiatan || '').trim(),
-        kodeRekening: String(tx.kodeRekening || '').trim(),
+        kodeKegiatan: String(tx.kodeKegiatan || '').replace(/\s+/g, ''),
+        kodeRekening: String(tx.kodeRekening || '').replace(/\s+/g, ''),
       }));
       
       if (parsedTransactions.length > 0) {
@@ -1020,14 +1172,14 @@ export default function Bku() {
       const formattedPreviewRows = previewRows.map((row: any) => ({
         ...row,
         tanggal: formatValueIfDate(row.tanggal, true),
-        kodeKegiatan: String(row.kodeKegiatan || '').trim(),
-        kodeRekening: String(row.kodeRekening || '').trim(),
+        kodeKegiatan: String(row.kodeKegiatan || '').replace(/\s+/g, ''),
+        kodeRekening: String(row.kodeRekening || '').replace(/\s+/g, ''),
       }));
       const formattedCurrentRows = rows.map((row: any) => ({
         ...row,
         tanggal: formatValueIfDate(row.tanggal, true),
-        kodeKegiatan: String(row.kodeKegiatan || '').trim(),
-        kodeRekening: String(row.kodeRekening || '').trim(),
+        kodeKegiatan: String(row.kodeKegiatan || '').replace(/\s+/g, ''),
+        kodeRekening: String(row.kodeRekening || '').replace(/\s+/g, ''),
       }));
 
       // Determine final row count based on selected merge method
@@ -1081,8 +1233,8 @@ export default function Bku() {
     const sanitizedRows = rows.map((row: any) => ({
       ...row,
       tanggal: formatValueIfDate(row.tanggal, true),
-      kodeKegiatan: String(row.kodeKegiatan || '').trim(),
-      kodeRekening: String(row.kodeRekening || '').trim(),
+      kodeKegiatan: String(row.kodeKegiatan || '').replace(/\s+/g, ''),
+      kodeRekening: String(row.kodeRekening || '').replace(/\s+/g, ''),
     }));
 
     setSavingData(true);
@@ -1117,6 +1269,8 @@ export default function Bku() {
           type: 'success'
         });
         setRows(sanitizedRows);
+        setIsEditingCodes(false);
+        setOriginalRows([]);
         await fetchMonthsWithData();
       } else {
         setDbActionStatus(null);
@@ -1348,14 +1502,58 @@ export default function Bku() {
                     <h3 className="font-bold text-md text-gray-800 dark:text-white">Entri Transaksi BKU - {activeMonth} {activeYear}</h3>
                     <p className="text-[11px] text-gray-400">Data lembar pengeluaran kas umum berdasarkan BKU terverifikasi resmi.</p>
                   </div>
-                  <button
-                    onClick={handleDeleteBku}
-                    disabled={savingData || (rows.length === 0 && !monthsWithData.includes(activeMonth))}
-                    className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-xl flex items-center gap-1 cursor-pointer transition shadow-sm disabled:opacity-50"
-                  >
-                    <Trash2 size={14} />
-                    <span>Hapus data BKU</span>
-                  </button>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {rows.length > 0 && (
+                      <>
+                        {isEditingCodes && hasChanges && (
+                          <button
+                            onClick={handleCancelEditKode}
+                            className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl flex items-center gap-1 cursor-pointer transition shadow-sm"
+                          >
+                            <X size={14} />
+                            <span>BATAL</span>
+                          </button>
+                        )}
+                        <button
+                          id="bku-edit-code-btn"
+                          onClick={handleEditKodeClick}
+                          className={`px-3.5 py-1.5 font-bold text-xs rounded-xl flex items-center gap-1 cursor-pointer transition shadow-sm 
+                            ${!isEditingCodes 
+                              ? 'bg-indigo-600 hover:bg-indigo-700 text-white' 
+                              : !hasChanges 
+                                ? 'bg-amber-600 hover:bg-amber-700 text-white' 
+                                : 'bg-emerald-600 hover:bg-emerald-700 text-white animate-pulse'
+                            }`}
+                        >
+                          {!isEditingCodes ? (
+                            <>
+                              <Edit size={14} />
+                              <span>Edit Kode</span>
+                            </>
+                          ) : !hasChanges ? (
+                            <>
+                              <X size={14} />
+                              <span>BATAL</span>
+                            </>
+                          ) : (
+                            <>
+                              <Save size={14} />
+                              <span>SIMPAN KE DATABASE</span>
+                            </>
+                          )}
+                        </button>
+                      </>
+                    )}
+
+                    <button
+                      onClick={handleDeleteBku}
+                      disabled={savingData || (rows.length === 0 && !monthsWithData.includes(activeMonth))}
+                      className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-xl flex items-center gap-1 cursor-pointer transition shadow-sm disabled:opacity-50"
+                    >
+                      <Trash2 size={14} />
+                      <span>Hapus data BKU</span>
+                    </button>
+                  </div>
                 </div>
 
                 {loadingData ? (
@@ -1392,16 +1590,34 @@ export default function Bku() {
                             rows.map((row, idx) => (
                               <tr key={idx} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/10 text-xs border-b border-gray-100 dark:border-gray-800">
                                 <td className="p-3.5 text-center text-gray-400 font-bold border-r border-gray-100/50 dark:border-gray-800/40">{idx + 1}</td>
-                                <td className="p-3.5 text-center font-mono font-bold text-gray-800 dark:text-gray-100 border-r border-gray-100/50 dark:border-gray-800/40">{row.tanggal}</td>
+                                <td className="p-3.5 text-center font-mono font-bold text-gray-800 dark:text-gray-100 border-r border-gray-100/50 dark:border-gray-800/40">{formatValueIfDate(row.tanggal, true)}</td>
                                 <td className="p-3.5 text-center border-r border-gray-100/50 dark:border-gray-800/40">
-                                  <span className="inline-block px-2.5 py-1 text-[11px] font-mono font-bold text-blue-700 bg-blue-50/50 dark:text-blue-300 dark:bg-blue-950/40 rounded-md border border-blue-100/50 dark:border-blue-900/30">
-                                    {row.kodeKegiatan}
-                                  </span>
+                                  {isEditingCodes ? (
+                                    <input
+                                      type="text"
+                                      value={row.kodeKegiatan}
+                                      onChange={(e) => updateRowValue(idx, 'kodeKegiatan', e.target.value)}
+                                      className="px-2 py-0.5 text-[11px] font-mono font-bold text-blue-700 bg-white dark:bg-gray-800 rounded-md border border-blue-300 dark:border-blue-700 focus:outline-none focus:ring-1 focus:ring-blue-500 w-full text-center"
+                                    />
+                                  ) : (
+                                    <span className="inline-block px-2.5 py-1 text-[11px] font-mono font-bold text-blue-700 bg-blue-50/50 dark:text-blue-300 dark:bg-blue-950/40 rounded-md border border-blue-100/50 dark:border-blue-900/30">
+                                      {row.kodeKegiatan}
+                                    </span>
+                                  )}
                                 </td>
                                 <td className="p-3.5 border-l border-gray-200/50 dark:border-gray-700 border-r border-gray-100/50 dark:border-gray-800/40 text-center">
-                                  <span className="inline-block px-2.5 py-1 text-[11px] font-mono font-bold text-slate-700 bg-slate-100/40 dark:text-slate-300 dark:bg-slate-900/40 rounded-md border border-slate-200 dark:border-slate-800/40">
-                                    {row.kodeRekening}
-                                  </span>
+                                  {isEditingCodes ? (
+                                    <input
+                                      type="text"
+                                      value={row.kodeRekening}
+                                      onChange={(e) => updateRowValue(idx, 'kodeRekening', e.target.value)}
+                                      className="px-2 py-0.5 text-[11px] font-mono font-bold text-slate-700 bg-white dark:bg-gray-800 rounded-md border border-slate-300 dark:border-slate-700 focus:outline-none focus:ring-1 focus:ring-slate-500 w-full text-center"
+                                    />
+                                  ) : (
+                                    <span className="inline-block px-2.5 py-1 text-[11px] font-mono font-bold text-slate-700 bg-slate-100/40 dark:text-slate-300 dark:bg-slate-900/40 rounded-md border border-slate-200 dark:border-slate-800/40">
+                                      {row.kodeRekening}
+                                    </span>
+                                  )}
                                 </td>
                                 <td className="p-3.5 text-center border-r border-gray-100/50 dark:border-gray-800/40">
                                   <span className="inline-block px-2.5 py-1 text-[11px] font-mono font-bold text-violet-750 bg-violet-50 dark:text-violet-300 dark:bg-violet-950/40 rounded-md border border-violet-100/55 dark:border-violet-900/30">
@@ -1419,10 +1635,8 @@ export default function Bku() {
                           )}
                         </tbody>
                       </table>
-                    </div>
-
-                    {/* Ledger Totals Footer */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-gray-100 dark:border-gray-750 pt-4 text-xs font-mono">
+                    </div>                    {/* Ledger Totals Footer */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-gray-100 dark:border-gray-755 pt-4 text-xs font-mono">
                       <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border border-gray-150 dark:border-gray-755 rounded-xl space-y-0.5">
                         <span className="text-[9px] font-sans font-bold text-gray-500 dark:text-gray-400 uppercase">Jumlah Item Transaksi:</span>
                         <div className="font-black text-gray-800 dark:text-white text-sm">
@@ -1433,6 +1647,41 @@ export default function Bku() {
                         <span className="text-[9px] font-sans font-bold text-red-600 dark:text-red-400 uppercase">Total Pengeluaran Bulan {activeMonth}:</span>
                         <div className="font-black text-red-700 dark:text-red-400 text-sm">
                           Rp {new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0 }).format(totalKredit)}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* BPU and BNU details requested by the user */}
+                    <div className="p-4 bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800/80 rounded-2xl space-y-3">
+                      <div className="flex items-center gap-2">
+                        <span className="p-1 px-2 text-[10px] font-black bg-slate-200 dark:bg-slate-800 text-slate-850 dark:text-slate-250 rounded-md">INFO BKU</span>
+                        <h5 className="text-xs font-black text-slate-800 dark:text-slate-200">Keterangan Pengeluaran TUNAI & Non-TUNAI</h5>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
+                        <div className="p-3 bg-white dark:bg-gray-800 border border-emerald-100 dark:border-emerald-950/40 rounded-xl space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Pengeluaran TUNAI (BPU)</span>
+                            <span className="px-1.5 py-0.5 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 text-[9px] font-black uppercase rounded-md tracking-wider">TUNAI</span>
+                          </div>
+                          <div className="font-extrabold text-emerald-650 dark:text-emerald-400 text-base">
+                            Rp {new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0 }).format(totalBpuInternal)}
+                          </div>
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-normal font-medium">
+                            Untuk Nomor Bukti dengan data awalan <span className="font-black text-black dark:text-white underline decoration-emerald-500 decoration-2">BPU</span> dikategorikan sebagai <span className="font-black">Pengeluaran TUNAI</span>.
+                          </p>
+                        </div>
+
+                        <div className="p-3 bg-white dark:bg-gray-800 border border-blue-100 dark:border-blue-950/40 rounded-xl space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Pengeluaran NON-TUNAI (BNU)</span>
+                            <span className="px-1.5 py-0.5 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 text-[9px] font-black uppercase rounded-md tracking-wider">NON-TUNAI</span>
+                          </div>
+                          <div className="font-extrabold text-blue-650 dark:text-blue-400 text-base">
+                            Rp {new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0 }).format(totalBnuInternal)}
+                          </div>
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-normal font-medium">
+                            Untuk Nomor Bukti dengan data awalan <span className="font-black text-black dark:text-white underline decoration-blue-500 decoration-2">BNU</span> dikategorikan sebagai <span className="font-black">Pengeluaran NON-TUNAI</span>.
+                          </p>
                         </div>
                       </div>
                     </div>
@@ -1560,7 +1809,7 @@ export default function Bku() {
                         {previewRows.map((row, idx) => (
                           <tr key={idx} className="hover:bg-gray-100 transition-colors bg-white">
                             <td className="p-4 text-center text-black font-black border-r-[2px] border-black bg-white font-mono text-[13px]">{idx + 1}</td>
-                            <td className="p-4 text-center font-mono font-black text-black border-r-[2px] border-black text-[13px] tracking-tight bg-white">{row.tanggal}</td>
+                            <td className="p-4 text-center font-mono font-black text-black border-r-[2px] border-black text-[13px] tracking-tight bg-white">{formatValueIfDate(row.tanggal, true)}</td>
                             <td className="p-4 text-center border-r-[2px] border-black bg-white">
                               <span className="font-mono font-black text-[13px] text-black">
                                 {row.kodeKegiatan}
@@ -1600,6 +1849,51 @@ export default function Bku() {
                       <span className="text-sm font-black text-white bg-black border-[2px] border-black px-3 py-1.5 rounded-xl font-mono">
                         Rp {new Intl.NumberFormat('id-ID').format(previewRows.reduce((sum, r) => sum + (parseFloat(r.kredit) || 0), 0))}
                       </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Preview BPU and BNU details requested by the user */}
+                <div className="p-4 bg-gray-50 border-[3px] border-black rounded-2xl space-y-3 text-black">
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 bg-black text-white text-[10px] font-black rounded font-mono">INFO BKU</span>
+                    <h5 className="text-xs font-black">Keterangan Pengeluaran TUNAI & Non-TUNAI</h5>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-[12px] font-mono">
+                    <div className="p-3.5 bg-white border-[2px] border-black rounded-xl space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-black text-gray-500 uppercase tracking-wider">Pengeluaran TUNAI (BPU)</span>
+                        <span className="px-1.5 py-0.5 bg-black text-white text-[9px] font-black rounded tracking-wider font-sans uppercase">TUNAI</span>
+                      </div>
+                      <div className="font-black text-black text-base">
+                        Rp {new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0 }).format(
+                          previewRows.reduce((sum, r) => {
+                            const isBpu = /^BPU/i.test((r.bukti || '').trim());
+                            return isBpu ? sum + (parseFloat(r.kredit) || 0) : sum;
+                          }, 0)
+                        )}
+                      </div>
+                      <p className="text-[11px] text-gray-700 leading-normal font-sans font-medium">
+                        Untuk Nomor Bukti dengan data awalan <span className="font-extrabold text-black underline decoration-black decoration-2">BPU</span> dikategorikan sebagai <span className="font-black">Pengeluaran TUNAI</span>.
+                      </p>
+                    </div>
+
+                    <div className="p-3.5 bg-white border-[2px] border-black rounded-xl space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-black text-gray-500 uppercase tracking-wider">Pengeluaran NON-TUNAI (BNU)</span>
+                        <span className="px-1.5 py-0.5 bg-black text-white text-[9px] font-black rounded tracking-wider font-sans uppercase">NON-TUNAI</span>
+                      </div>
+                      <div className="font-black text-black text-base">
+                        Rp {new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0 }).format(
+                          previewRows.reduce((sum, r) => {
+                            const isBnu = /^BNU/i.test((r.bukti || '').trim());
+                            return isBnu ? sum + (parseFloat(r.kredit) || 0) : sum;
+                          }, 0)
+                        )}
+                      </div>
+                      <p className="text-[11px] text-gray-700 leading-normal font-sans font-medium">
+                        Untuk Nomor Bukti dengan data awalan <span className="font-extrabold text-black underline decoration-black decoration-2">BNU</span> dikategorikan sebagai <span className="font-black">Pengeluaran NON-TUNAI</span>.
+                      </p>
                     </div>
                   </div>
                 </div>

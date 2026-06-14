@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
 import { cleanGoogleSheetsDateToCode } from './Rkas';
@@ -60,6 +60,8 @@ interface KwitansiPrintData {
   kodeRekening?: string;
   namaKegiatan?: string;
   namaRekening?: string;
+  kegiatanList?: { kode: string; nama: string }[];
+  rekeningList?: { kode: string; nama: string }[];
 }
 
 // Indonesian "Terbilang" conversion helper
@@ -126,25 +128,39 @@ export default function Kwitansi() {
   const [previewItem, setPreviewItem] = useState<KwitansiPrintData | null>(null);
 
   // Local state to manage editable recipients
-  const [penerimaState, setPenerimaState] = useState<{ [key: string]: string }>(() => {
+  const [penerimaState, setPenerimaState] = useState<{ [key: string]: string }>({});
+
+  useEffect(() => {
+    if (!user?.sekolah) return;
     const saved: { [key: string]: string } = {};
+    const prefix = `siap_bos_penerima_${user.sekolah}_`;
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key && key.startsWith('siap_bos_penerima_')) {
-        const noBukti = key.replace('siap_bos_penerima_', '');
+      if (key && key.startsWith(prefix)) {
+        const noBukti = key.replace(prefix, '');
         saved[noBukti] = localStorage.getItem(key) || '';
       }
     }
-    return saved;
-  });
+    setPenerimaState(saved);
+  }, [user?.sekolah]);
 
   const handlePenerimaChange = (noBukti: string, value: string) => {
     setPenerimaState(prev => ({
       ...prev,
       [noBukti]: value
     }));
-    localStorage.setItem(`siap_bos_penerima_${noBukti}`, value);
+    if (user?.sekolah) {
+      localStorage.setItem(`siap_bos_penerima_${user.sekolah}_${noBukti}`, value);
+    }
   };
+
+  const uniquePenerimaList = useMemo(() => {
+    const list = (Object.values(penerimaState) as string[])
+      .map(name => name?.trim())
+      .filter((name): name is string => !!name)
+      .filter((name, idx, self) => self.indexOf(name) === idx);
+    return list.sort((a, b) => a.localeCompare(b));
+  }, [penerimaState]);
 
   // State Management for "BUAT DATA PENERIMA" modal
   const [showPenerimaModal, setShowPenerimaModal] = useState(false);
@@ -166,7 +182,7 @@ export default function Kwitansi() {
           parsed.forEach((kw: any) => {
             if (kw.noKwitansi && kw.penerima) {
               dbPenerima[kw.noKwitansi] = kw.penerima;
-              localStorage.setItem(`siap_bos_penerima_${kw.noKwitansi}`, kw.penerima);
+              localStorage.setItem(`siap_bos_penerima_${user.sekolah}_${kw.noKwitansi}`, kw.penerima);
             }
           });
           setPenerimaState(prev => ({ ...prev, ...dbPenerima }));
@@ -191,7 +207,7 @@ export default function Kwitansi() {
         data.data.forEach((kw: any) => {
           if (kw.noKwitansi && kw.penerima) {
             dbPenerima[kw.noKwitansi] = kw.penerima;
-            localStorage.setItem(`siap_bos_penerima_${kw.noKwitansi}`, kw.penerima);
+            localStorage.setItem(`siap_bos_penerima_${user.sekolah}_${kw.noKwitansi}`, kw.penerima);
           }
         });
         setPenerimaState(prev => ({ ...prev, ...dbPenerima }));
@@ -266,42 +282,90 @@ export default function Kwitansi() {
     'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
   ];
 
+  // Universal smart parser to avoid Javascript new Date() swapping day and month for Indonesian DD/MM/YYYY dates
+  const parseSmartDate = (str: any): Date | null => {
+    if (!str) return null;
+    let cleanStr = String(str).trim();
+    if (cleanStr === '') return null;
+
+    // Clean parenthesized timezone strings like '(Waktu Indochina)' or '(Coordinated Universal Time)'
+    if (cleanStr.includes('(')) {
+      cleanStr = cleanStr.split('(')[0].trim();
+    }
+
+    if (cleanStr.includes('/Date(')) {
+      const match = cleanStr.match(/\d+/);
+      if (match) {
+        const d = new Date(parseInt(match[0]));
+        if (!isNaN(d.getTime())) return d;
+      }
+    }
+
+    // Look for a date token formatted as DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD or YYYY/MM/DD
+    const tokens = cleanStr.split(/\s+/);
+    for (const token of tokens) {
+      if (token.includes('/') || token.includes('-')) {
+        const parts = token.split(/[-/]/);
+        if (parts.length === 3) {
+          if (parts[0].length === 4) {
+            // YYYY-MM-DD or YYYY/MM/DD
+            const yyyy = parseInt(parts[0]);
+            const mm = parseInt(parts[1]) - 1;
+            const dd = parseInt(parts[2]);
+            const d = new Date(yyyy, mm, dd);
+            if (!isNaN(d.getTime())) return d;
+          } else if (parts[2].length === 4) {
+            // DD-MM-YYYY or DD/MM/YYYY
+            const dd = parseInt(parts[0]);
+            const mm = parseInt(parts[1]) - 1;
+            const yyyy = parseInt(parts[2]);
+            const d = new Date(yyyy, mm, dd);
+            if (!isNaN(d.getTime())) return d;
+          }
+        }
+      }
+    }
+
+    // Indonesian verbal format like "04 Februari 2025" or "4 Februari 2025"
+    const monthsMap: { [key: string]: number } = {
+      januari: 0, februari: 1, maret: 2, april: 3, mei: 4, juni: 5,
+      juli: 6, agustus: 7, september: 8, oktober: 9, november: 10, desember: 11
+    };
+    const cleaned = cleanStr.toLowerCase().replace(/[^a-z0-9\s]/g, '');
+    const parts = cleaned.split(/\s+/);
+    if (parts.length === 3) {
+      const dd = parseInt(parts[0]);
+      const mm = monthsMap[parts[1]] !== undefined ? monthsMap[parts[1]] : -1;
+      const yyyy = parseInt(parts[2]);
+      if (dd > 0 && mm >= 0 && yyyy > 1000) {
+        const d = new Date(yyyy, mm, dd);
+        if (!isNaN(d.getTime())) return d;
+      }
+    }
+
+    // Fallback to native parsing
+    const fallbackDate = new Date(cleanStr);
+    if (!isNaN(fallbackDate.getTime())) {
+      return fallbackDate;
+    }
+
+    return null;
+  };
+
   // Helper date function parsing Date strings or JSON dates
   const formatValueIfDate = (val: any, returnShortDate = false): string => {
     if (!val) return '';
-    const str = String(val).trim();
-    if (str.includes('/Date(')) {
-      const match = str.match(/\d+/);
-      if (match) {
-        const d = new Date(parseInt(match[0]));
-        if (!isNaN(d.getTime())) {
-          if (returnShortDate) {
-            const day = String(d.getDate()).padStart(2, '0');
-            const month = String(d.getMonth() + 1).padStart(2, '0');
-            const year = d.getFullYear();
-            return `${day}/${month}/${year}`;
-          }
-          return d.toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
-        }
+    const d = parseSmartDate(val);
+    if (d && !isNaN(d.getTime())) {
+      if (returnShortDate) {
+        const day = String(d.getDate()).padStart(2, '0');
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const year = d.getFullYear();
+        return `${day}/${month}/${year}`;
       }
+      return d.toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
     }
-
-    // Try parsing ISO, standard JS dates, or long GMT dates (e.g., Tue Feb 04 2025...)
-    const isNumeric = /^\d+$/.test(str);
-    if (!isNumeric && (str.includes(' ') || str.includes('-') || str.includes('/'))) {
-      const d = new Date(str);
-      if (!isNaN(d.getTime())) {
-        if (returnShortDate) {
-          const day = String(d.getDate()).padStart(2, '0');
-          const month = String(d.getMonth() + 1).padStart(2, '0');
-          const year = d.getFullYear();
-          return `${day}/${month}/${year}`;
-        }
-        return d.toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
-      }
-    }
-
-    return str;
+    return String(val);
   };
 
   const formatNameDegreeCasing = (name: string): string => {
@@ -508,6 +572,7 @@ export default function Kwitansi() {
       }
     } catch (err) {
       console.error("Error checking BKU months for Kwitansi:", err);
+      toast.error("Layanan BKU saat ini sedang tidak tersedia. Mohon periksa koneksi atau coba sesaat lagi.");
     }
   };
 
@@ -520,7 +585,12 @@ export default function Kwitansi() {
       const cached = sessionStorage.getItem(cacheKey);
       if (cached) {
         try {
-          setBkuRows(JSON.parse(cached));
+          const parsed = JSON.parse(cached);
+          const formatted = parsed.map((row: any) => ({
+            ...row,
+            tanggal: formatValueIfDate(row.tanggal, true),
+          }));
+          setBkuRows(formatted);
           return;
         } catch (e) {}
       }
@@ -812,12 +882,26 @@ export default function Kwitansi() {
       kodeKegiatan: matchedKegRow ? matchedKegRow.keg : (resolvedKodeKeg || '05.08.03'),
       kodeRekening: matchedRekRow ? matchedRekRow.rek : (resolvedKodeRek || '5.1.02.03.02.0115'),
       namaKegiatan: namaKegiatan || 'Pembelian Bahan Habis Pakai untuk mendukung pembelajaran dan administrasi sekolah (termasuk ATK, Tinta Printer, Kabel Ekstension, dsb)', 
-      namaRekening: namaRekening || 'Belanja Alat/Bahan untuk Kegiatan Kantor-Alat Tulis Kantor' 
+      namaRekening: namaRekening || 'Belanja Alat/Bahan untuk Kegiatan Kantor-Alat Tulis Kantor',
+      hasKegMatch: !!matchedKegRow,
+      hasRekMatch: !!matchedRekRow 
     };
   };
 
   useEffect(() => {
     if (user?.sekolah) {
+      // Clear legacy BKU cache to ensure fresh correct dates are fetched and formatted correctly
+      try {
+        const keysToRemove: string[] = [];
+        for (let i = 0; i < sessionStorage.length; i++) {
+          const key = sessionStorage.key(i);
+          if (key && key.includes('_bku_')) {
+            keysToRemove.push(key);
+          }
+        }
+        keysToRemove.forEach(k => sessionStorage.removeItem(k));
+      } catch (e) {}
+
       fetchDatabases();
       fetchSchoolPersonnel();
     }
@@ -891,7 +975,7 @@ export default function Kwitansi() {
 
   // Open configuration model before running physical system print
   const openPrintSetup = (group: KwitansiGroup) => {
-    const keyPenerima = `siap_bos_penerima_${group.noBukti}`;
+    const keyPenerima = `siap_bos_penerima_${user?.sekolah || ''}_${group.noBukti}`;
     const savedPenerima = localStorage.getItem(keyPenerima) || penerimaState[group.noBukti] || '';
     
     // Default sudahTerimaDari: "BENDAHARA BOS [NAMA SEKOLAH]"
@@ -901,10 +985,74 @@ export default function Kwitansi() {
     // Join descriptions with high contrast spacing
     const joinedKeterangan = group.items.map(it => it.keterangan).join('; ');
     
-    // Choose the first item that has a non-empty Account Code (kodeRekening), fallback to the absolute first item
-    const firstItem = group.items.find(it => it.kodeRekening && it.kodeRekening.trim() !== '') || group.items[0] || { kodeKegiatan: '', kodeRekening: '' };
+    // Choose the first item that has a non-empty Account Code starting with '5.', fallback to the absolute first item
+    const firstItem = group.items.find(it => it.kodeRekening && it.kodeRekening.trim().startsWith('5.')) || group.items[0] || { kodeKegiatan: '', kodeRekening: '' };
     const { kodeKegiatan: resolvedKeg, kodeRekening: resolvedRek, namaKegiatan, namaRekening } = findRkasDescriptions(firstItem.kodeKegiatan, firstItem.kodeRekening);
     
+    // Helper to validate kegiatan codes (preventing date/corrupt numerical entries like "1050000")
+    const isValidKegiatanCode = (code: string, hasRkasMatch: boolean): boolean => {
+      const cleaned = String(code || '').trim();
+      if (!cleaned || cleaned === '-' || cleaned === '0') return false;
+      if (hasRkasMatch) return true;
+      // Must look like a standard RKAS kegiatan code (e.g. starts with '0' followed by digits and a dot)
+      return /^0\d\./.test(cleaned);
+    };
+
+    // Collect all unique Kode Kegiatan and Kode Rekening, with their respective names
+    const kegiatanList: { kode: string; nama: string }[] = [];
+    const rekeningList: { kode: string; nama: string }[] = [];
+    const seenKegs = new Set<string>();
+    const seenReks = new Set<string>();
+
+    group.items.forEach(it => {
+      const pureKeg = String(it.kodeKegiatan || '').replace(/\s+/g, '').trim();
+      const pureRek = String(it.kodeRekening || '').replace(/\s+/g, '').trim();
+      
+      // ONLY process if it's a valid expense account (starting with '5.'). Excludes tax/liability accounts.
+      if (pureRek && pureRek.startsWith('5.')) {
+        if (pureKeg) {
+          const res = findRkasDescriptions(pureKeg, '');
+          const kegCode = res.kodeKegiatan;
+          const kegName = res.namaKegiatan;
+          const hasKegMatch = res.hasKegMatch;
+
+          if (isValidKegiatanCode(kegCode || pureKeg, hasKegMatch)) {
+            const normKegKey = String(kegCode || pureKeg)
+              .replace(/\s+/g, '')
+              .replace(/^\.+|\.+$/g, '')
+              .toLowerCase();
+
+            if (!seenKegs.has(normKegKey)) {
+              seenKegs.add(normKegKey);
+              kegiatanList.push({ kode: kegCode || pureKeg, nama: kegName });
+            }
+          }
+        }
+
+        const resRek = findRkasDescriptions('', pureRek);
+        const rekCode = resRek.kodeRekening;
+        const rekName = resRek.namaRekening;
+
+        const normRekKey = String(rekCode || pureRek)
+          .replace(/\s+/g, '')
+          .replace(/^\.+|\.+$/g, '')
+          .toLowerCase();
+
+        if (!seenReks.has(normRekKey)) {
+          seenReks.add(normRekKey);
+          rekeningList.push({ kode: rekCode || pureRek, nama: rekName });
+        }
+      }
+    });
+
+    // Fallbacks if lists are empty
+    if (kegiatanList.length === 0) {
+      kegiatanList.push({ kode: resolvedKeg || '05.08.03', nama: namaKegiatan });
+    }
+    if (rekeningList.length === 0) {
+      rekeningList.push({ kode: resolvedRek || '5.1.02.03.02.0115', nama: namaRekening });
+    }
+
     setPrintModalItem({
       noKwitansi: group.noBukti,
       sudahTerimaDari: defaultSudahTerima,
@@ -920,7 +1068,9 @@ export default function Kwitansi() {
       kodeKegiatan: resolvedKeg || '05.08.03',
       kodeRekening: resolvedRek || '5.1.02.03.02.0115',
       namaKegiatan: namaKegiatan,
-      namaRekening: namaRekening
+      namaRekening: namaRekening,
+      kegiatanList,
+      rekeningList
     });
   };
 
@@ -1137,7 +1287,7 @@ export default function Kwitansi() {
                   </thead>
                   <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
                     {filteredGroupedKwitansis.map((group) => {
-                      const keyPenerima = `siap_bos_penerima_${group.noBukti}`;
+                      const keyPenerima = `siap_bos_penerima_${user?.sekolah || ''}_${group.noBukti}`;
                       const currentPenerima = localStorage.getItem(keyPenerima) || penerimaState[group.noBukti] || '';
                       
                       return (
@@ -1283,63 +1433,160 @@ export default function Kwitansi() {
                         />
                       </div>
 
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-black text-gray-500 uppercase tracking-widest block">Untuk Pembayaran (Tambahan Rincian)</label>
-                        <textarea
-                          rows={2}
-                          value={printModalItem.untukPembayaran}
-                          onChange={(e) => setPrintModalItem({ ...printModalItem, untukPembayaran: e.target.value })}
-                          required
-                          className="w-full p-2.5 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl outline-none text-xs text-gray-850 dark:text-white font-medium focus:border-black"
-                        />
+                      {/* Kode & Uraian Kegiatan Section */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[9px] font-black text-gray-500 uppercase tracking-widest block">Daftar Kode Kegiatan</label>
+                          {printModalItem.kegiatanList && printModalItem.kegiatanList.length > 1 && (
+                            <span className="text-[9px] font-black text-indigo-650 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded-full">
+                              {printModalItem.kegiatanList.length} KEGIATAN
+                            </span>
+                          )}
+                        </div>
+                        
+                        {printModalItem.kegiatanList && printModalItem.kegiatanList.length > 0 ? (
+                          printModalItem.kegiatanList.map((item, kIdx) => (
+                            <div key={kIdx} className="grid grid-cols-2 gap-3 p-2.5 bg-gray-50/50 dark:bg-gray-900/30 rounded-xl border border-gray-100 dark:border-gray-800">
+                              <div className="space-y-1">
+                                <label className="text-[8px] font-black text-gray-400 uppercase tracking-widest block">Kode Kegiatan #{kIdx + 1}</label>
+                                <input
+                                  type="text"
+                                  value={item.kode}
+                                  onChange={(e) => {
+                                    const updated = [...(printModalItem.kegiatanList || [])];
+                                    updated[kIdx] = { ...updated[kIdx], kode: e.target.value.replace(/\s+/g, '') };
+                                    setPrintModalItem({
+                                      ...printModalItem,
+                                      kegiatanList: updated,
+                                      kodeKegiatan: updated[0]?.kode || ''
+                                    });
+                                  }}
+                                  required
+                                  className="w-full p-2.5 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl outline-none text-xs text-gray-850 dark:text-white font-mono font-bold"
+                                />
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[8px] font-black text-gray-400 uppercase tracking-widest block">Uraian Kegiatan #{kIdx + 1}</label>
+                                <input
+                                  type="text"
+                                  value={item.nama}
+                                  onChange={(e) => {
+                                    const updated = [...(printModalItem.kegiatanList || [])];
+                                    updated[kIdx] = { ...updated[kIdx], nama: e.target.value };
+                                    setPrintModalItem({
+                                      ...printModalItem,
+                                      kegiatanList: updated,
+                                      namaKegiatan: updated[0]?.nama || ''
+                                    });
+                                  }}
+                                  required
+                                  className="w-full p-2.5 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl outline-none text-xs text-gray-850 dark:text-white font-bold"
+                                />
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                              <input
+                                type="text"
+                                value={printModalItem.kodeKegiatan}
+                                onChange={(e) => setPrintModalItem({ ...printModalItem, kodeKegiatan: e.target.value.replace(/\s+/g, '') })}
+                                required
+                                className="w-full p-2.5 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl outline-none text-xs text-gray-850 dark:text-white font-mono font-bold"
+                              />
+                            </div>
+
+                            <div className="space-y-1">
+                              <input
+                                type="text"
+                                value={printModalItem.namaKegiatan}
+                                onChange={(e) => setPrintModalItem({ ...printModalItem, namaKegiatan: e.target.value })}
+                                required
+                                className="w-full p-2.5 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl outline-none text-xs text-gray-850 dark:text-white font-bold"
+                              />
+                            </div>
+                          </div>
+                        )}
                       </div>
 
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="space-y-1">
-                          <label className="text-[9px] font-black text-gray-500 uppercase tracking-widest block">Kode Kegiatan</label>
-                          <input
-                            type="text"
-                            value={printModalItem.kodeKegiatan}
-                            onChange={(e) => setPrintModalItem({ ...printModalItem, kodeKegiatan: e.target.value })}
-                            required
-                            className="w-full p-2.5 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl outline-none text-xs text-gray-850 dark:text-white font-mono font-bold"
-                          />
+                      {/* Kode & Uraian Rekening Section */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[9px] font-black text-gray-500 uppercase tracking-widest block">Daftar Kode Rekening</label>
+                          {printModalItem.rekeningList && printModalItem.rekeningList.length > 1 && (
+                            <span className="text-[9px] font-black text-indigo-655 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded-full">
+                              {printModalItem.rekeningList.length} REKENING
+                            </span>
+                          )}
                         </div>
 
-                        <div className="space-y-1">
-                          <label className="text-[9px] font-black text-gray-500 uppercase tracking-widest block">Uraian Kegiatan</label>
-                          <input
-                            type="text"
-                            value={printModalItem.namaKegiatan}
-                            onChange={(e) => setPrintModalItem({ ...printModalItem, namaKegiatan: e.target.value })}
-                            required
-                            className="w-full p-2.5 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl outline-none text-xs text-gray-850 dark:text-white font-bold"
-                          />
-                        </div>
-                      </div>
+                        {printModalItem.rekeningList && printModalItem.rekeningList.length > 0 ? (
+                          printModalItem.rekeningList.map((item, rIdx) => (
+                            <div key={rIdx} className="grid grid-cols-2 gap-3 p-2.5 bg-gray-50/50 dark:bg-gray-900/30 rounded-xl border border-gray-100 dark:border-gray-800">
+                              <div className="space-y-1">
+                                <label className="text-[8px] font-black text-gray-400 uppercase tracking-widest block">Kode Rekening #{rIdx + 1}</label>
+                                <input
+                                  type="text"
+                                  value={item.kode}
+                                  onChange={(e) => {
+                                    const updated = [...(printModalItem.rekeningList || [])];
+                                    updated[rIdx] = { ...updated[rIdx], kode: e.target.value.replace(/\s+/g, '') };
+                                    setPrintModalItem({
+                                      ...printModalItem,
+                                      rekeningList: updated,
+                                      kodeRekening: updated[0]?.kode || ''
+                                    });
+                                  }}
+                                  required
+                                  className="w-full p-2.5 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl outline-none text-xs text-gray-850 dark:text-white font-mono font-bold"
+                                />
+                              </div>
 
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="space-y-1">
-                          <label className="text-[9px] font-black text-gray-500 uppercase tracking-widest block">Kode Rekening</label>
-                          <input
-                            type="text"
-                            value={printModalItem.kodeRekening}
-                            onChange={(e) => setPrintModalItem({ ...printModalItem, kodeRekening: e.target.value })}
-                            required
-                            className="w-full p-2.5 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl outline-none text-xs text-gray-850 dark:text-white font-mono"
-                          />
-                        </div>
+                              <div className="space-y-1">
+                                <label className="text-[8px] font-black text-gray-400 uppercase tracking-widest block">Uraian Rekening #{rIdx + 1}</label>
+                                <input
+                                  type="text"
+                                  value={item.nama}
+                                  onChange={(e) => {
+                                    const updated = [...(printModalItem.rekeningList || [])];
+                                    updated[rIdx] = { ...updated[rIdx], nama: e.target.value };
+                                    setPrintModalItem({
+                                      ...printModalItem,
+                                      rekeningList: updated,
+                                      namaRekening: updated[0]?.nama || ''
+                                    });
+                                  }}
+                                  required
+                                  className="w-full p-2.5 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl outline-none text-xs text-gray-850 dark:text-white font-medium"
+                                />
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                              <input
+                                type="text"
+                                value={printModalItem.kodeRekening}
+                                onChange={(e) => setPrintModalItem({ ...printModalItem, kodeRekening: e.target.value.replace(/\s+/g, '') })}
+                                required
+                                className="w-full p-2.5 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl outline-none text-xs text-gray-850 dark:text-white font-mono font-bold"
+                              />
+                            </div>
 
-                        <div className="space-y-1">
-                          <label className="text-[9px] font-black text-gray-500 uppercase tracking-widest block">Uraian Rekening</label>
-                          <input
-                            type="text"
-                            value={printModalItem.namaRekening}
-                            onChange={(e) => setPrintModalItem({ ...printModalItem, namaRekening: e.target.value })}
-                            required
-                            className="w-full p-2.5 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl outline-none text-xs text-gray-850 dark:text-white font-medium"
-                          />
-                        </div>
+                            <div className="space-y-1">
+                              <input
+                                type="text"
+                                value={printModalItem.namaRekening}
+                                onChange={(e) => setPrintModalItem({ ...printModalItem, namaRekening: e.target.value })}
+                                required
+                                className="w-full p-2.5 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl outline-none text-xs text-gray-850 dark:text-white font-medium"
+                              />
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       <div className="grid grid-cols-2 gap-3">
@@ -1376,8 +1623,33 @@ export default function Kwitansi() {
                               value={printModalItem.penerima}
                               onChange={(e) => setPrintModalItem({ ...printModalItem, penerima: e.target.value })}
                               required
-                              className="w-full p-2.5 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl outline-none text-xs text-gray-850 dark:text-white font-bold"
+                              list="print-penerima-suggestions"
+                              className="w-full p-2.5 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl outline-none text-xs text-gray-850 dark:text-white font-bold focus:border-indigo-500"
                             />
+                            <datalist id="print-penerima-suggestions">
+                              {uniquePenerimaList.map((name, idx) => (
+                                <option key={idx} value={name} />
+                              ))}
+                            </datalist>
+
+                            {uniquePenerimaList.length > 0 && (
+                              <div className="mt-1.5 space-y-1">
+                                <span className="text-[8px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-wider block">Riwayat Penerima:</span>
+                                <div className="flex flex-wrap gap-1 max-h-16 overflow-y-auto p-1.5 bg-gray-50/50 dark:bg-gray-900/20 rounded-lg border border-gray-100 dark:border-gray-800/80">
+                                  {uniquePenerimaList.map((name, idx) => (
+                                    <button
+                                      key={idx}
+                                      type="button"
+                                      onClick={() => setPrintModalItem({ ...printModalItem, penerima: name })}
+                                      className="text-[9px] font-bold px-1.5 py-0.5 bg-white hover:bg-indigo-50 dark:bg-gray-950 dark:hover:bg-indigo-950/30 border border-gray-200 dark:border-gray-800 rounded-md text-gray-700 dark:text-gray-300 transition-all cursor-pointer shadow-xs truncate max-w-[120px]"
+                                      title={name}
+                                    >
+                                      {name}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           </div>
 
                           <div className="space-y-1">
@@ -1457,23 +1729,53 @@ export default function Kwitansi() {
                           <div className="space-y-2 pt-1">
                             <span className="font-bold underline uppercase text-[11px] block text-black">Untuk Pembayaran</span>
                             
-                            <div className="flex items-start pl-3 leading-normal">
-                              <span className="w-28 font-bold text-black shrink-0 text-[11px]">Kode Kegiatan</span>
-                              <span className="px-1.5 font-bold text-black">:</span>
-                              <div className="flex-1 text-black font-medium text-[11px]">
-                                <span className="font-bold font-mono mr-1">{printModalItem.kodeKegiatan}</span>
-                                <span className="font-semibold">{printModalItem.namaKegiatan}</span>
+                            {printModalItem.kegiatanList && printModalItem.kegiatanList.length > 0 ? (
+                              printModalItem.kegiatanList.map((item, index) => (
+                                <div key={index} className="flex items-start pl-3 leading-normal">
+                                  <span className="w-28 font-bold text-black shrink-0 text-[11px]">
+                                    {index === 0 ? "Kode Kegiatan" : ""}
+                                  </span>
+                                  <span className="px-1.5 font-bold text-black">:</span>
+                                  <div className="flex-1 text-black font-medium text-[11px]">
+                                    <span className="font-bold font-mono mr-1">{item.kode}</span>
+                                    <span className="font-semibold">{item.nama}</span>
+                                  </div>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="flex items-start pl-3 leading-normal">
+                                <span className="w-28 font-bold text-black shrink-0 text-[11px]">Kode Kegiatan</span>
+                                <span className="px-1.5 font-bold text-black">:</span>
+                                <div className="flex-1 text-black font-medium text-[11px]">
+                                  <span className="font-bold font-mono mr-1">{printModalItem.kodeKegiatan}</span>
+                                  <span className="font-semibold">{printModalItem.namaKegiatan}</span>
+                                </div>
                               </div>
-                            </div>
+                            )}
 
-                            <div className="flex items-start pl-3 leading-normal">
-                              <span className="w-28 font-bold text-black shrink-0 text-[11px]">Kode Rekening</span>
-                              <span className="px-1.5 font-bold text-black">:</span>
-                              <div className="flex-1 text-black font-medium text-[11px] leading-snug break-words">
-                                <span className="font-bold font-mono mr-1">{printModalItem.kodeRekening}</span>
-                                <span className="font-semibold">{printModalItem.namaRekening}</span>
+                            {printModalItem.rekeningList && printModalItem.rekeningList.length > 0 ? (
+                              printModalItem.rekeningList.map((item, index) => (
+                                <div key={index} className="flex items-start pl-3 leading-normal">
+                                  <span className="w-28 font-bold text-black shrink-0 text-[11px]">
+                                    {index === 0 ? "Kode Rekening" : ""}
+                                  </span>
+                                  <span className="px-1.5 font-bold text-black">:</span>
+                                  <div className="flex-1 text-black font-medium text-[11px] leading-snug break-words">
+                                    <span className="font-bold font-mono mr-1">{item.kode}</span>
+                                    <span className="font-semibold">{item.nama}</span>
+                                  </div>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="flex items-start pl-3 leading-normal">
+                                <span className="w-28 font-bold text-black shrink-0 text-[11px]">Kode Rekening</span>
+                                <span className="px-1.5 font-bold text-black">:</span>
+                                <div className="flex-1 text-black font-medium text-[11px] leading-snug break-words">
+                                  <span className="font-bold font-mono mr-1">{printModalItem.kodeRekening}</span>
+                                  <span className="font-semibold">{printModalItem.namaRekening}</span>
+                                </div>
                               </div>
-                            </div>
+                            )}
                           </div>
                         </div>
 
@@ -1624,17 +1926,44 @@ export default function Kwitansi() {
                         );
                       })()}
 
-                      {/* Recipient Input field */}
-                      <div className="space-y-1.5 font-sans">
+                      {/* Recipient Input field with Autocomplete/Datalist and quick select tags */}
+                      <div className="space-y-2 font-sans">
                         <label className="text-xs font-black text-gray-500 uppercase tracking-widest block font-sans">Penerima</label>
                         <input
                           type="text"
                           value={modalPenerima}
                           onChange={(e) => setModalPenerima(e.target.value)}
-                          placeholder="Masukkan nama penerima..."
+                          placeholder="Masukkan atau pilih nama penerima..."
+                          list="modal-penerima-suggestions"
                           className="w-full p-2.5 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-xs font-bold rounded-xl outline-none text-gray-900 dark:text-white shadow-sm focus:border-indigo-500"
                           required
                         />
+                        <datalist id="modal-penerima-suggestions">
+                          {uniquePenerimaList.map((name, idx) => (
+                            <option key={idx} value={name} />
+                          ))}
+                        </datalist>
+
+                        {uniquePenerimaList.length > 0 && (
+                          <div className="space-y-1.5 pt-1.5 border-t border-gray-100 dark:border-gray-800/60">
+                            <span className="text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-wider block">
+                              Pilih dari Riwayat Penerima:
+                            </span>
+                            <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto p-1.5 bg-gray-50/50 dark:bg-gray-950/20 rounded-xl border border-gray-150 dark:border-gray-850">
+                              {uniquePenerimaList.map((name, idx) => (
+                                <button
+                                  key={idx}
+                                  type="button"
+                                  onClick={() => setModalPenerima(name)}
+                                  className="text-[10px] font-bold px-2 py-1 bg-white hover:bg-indigo-50 dark:bg-gray-900 dark:hover:bg-indigo-950/30 border border-gray-200 dark:border-gray-800 rounded-lg text-gray-850 dark:text-gray-200 transition-all cursor-pointer shadow-xs whitespace-nowrap inline-flex items-center gap-1 hover:scale-[1.01] active:scale-[0.99] duration-100"
+                                >
+                                  <User size={10} className="text-indigo-400 shrink-0" />
+                                  <span>{name}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                     </div>
@@ -1712,23 +2041,53 @@ export default function Kwitansi() {
                   <div className="space-y-2 pt-1">
                     <span className="font-bold underline uppercase text-[12px] block text-black">Untuk Pembayaran</span>
                     
-                    <div className="flex items-start pl-3 leading-normal">
-                      <span className="w-28 font-bold text-black shrink-0">Kode Kegiatan</span>
-                      <span className="px-1 font-bold text-black">:</span>
-                      <div className="flex-1 text-black font-medium text-[12px]">
-                        <span className="font-bold font-mono mr-1">{previewItem.kodeKegiatan}</span>
-                        <span className="font-semibold">{previewItem.namaKegiatan}</span>
+                    {previewItem.kegiatanList && previewItem.kegiatanList.length > 0 ? (
+                      previewItem.kegiatanList.map((item, index) => (
+                        <div key={index} className="flex items-start pl-3 leading-normal">
+                          <span className="w-28 font-bold text-black shrink-0">
+                            {index === 0 ? "Kode Kegiatan" : ""}
+                          </span>
+                          <span className="px-1 font-bold text-black">:</span>
+                          <div className="flex-1 text-black font-medium text-[12px]">
+                            <span className="font-bold font-mono mr-1">{item.kode}</span>
+                            <span className="font-semibold">{item.nama}</span>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="flex items-start pl-3 leading-normal">
+                        <span className="w-28 font-bold text-black shrink-0">Kode Kegiatan</span>
+                        <span className="px-1 font-bold text-black">:</span>
+                        <div className="flex-1 text-black font-medium text-[12px]">
+                          <span className="font-bold font-mono mr-1">{previewItem.kodeKegiatan}</span>
+                          <span className="font-semibold">{previewItem.namaKegiatan}</span>
+                        </div>
                       </div>
-                    </div>
+                    )}
 
-                    <div className="flex items-start pl-3 leading-normal">
-                      <span className="w-28 font-bold text-black shrink-0">Kode Rekening</span>
-                      <span className="px-1 font-bold text-black">:</span>
-                      <div className="flex-1 text-black font-medium text-[12px] leading-snug break-words">
-                        <span className="font-bold font-mono mr-1">{previewItem.kodeRekening}</span>
-                        <span className="font-semibold">{previewItem.namaRekening}</span>
+                    {previewItem.rekeningList && previewItem.rekeningList.length > 0 ? (
+                      previewItem.rekeningList.map((item, index) => (
+                        <div key={index} className="flex items-start pl-3 leading-normal">
+                          <span className="w-28 font-bold text-black shrink-0">
+                            {index === 0 ? "Kode Rekening" : ""}
+                          </span>
+                          <span className="px-1 font-bold text-black">:</span>
+                          <div className="flex-1 text-black font-medium text-[12px] leading-snug break-words">
+                            <span className="font-bold font-mono mr-1">{item.kode}</span>
+                            <span className="font-semibold">{item.nama}</span>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="flex items-start pl-3 leading-normal">
+                        <span className="w-28 font-bold text-black shrink-0">Kode Rekening</span>
+                        <span className="px-1 font-bold text-black">:</span>
+                        <div className="flex-1 text-black font-medium text-[12px] leading-snug break-words">
+                          <span className="font-bold font-mono mr-1">{previewItem.kodeRekening}</span>
+                          <span className="font-semibold">{previewItem.namaRekening}</span>
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 </div>
 
