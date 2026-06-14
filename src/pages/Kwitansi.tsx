@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { cleanGoogleSheetsDateToCode } from './Rkas';
 import { 
@@ -87,8 +88,15 @@ function getTerbilangString(num: number): string {
 
 export default function Kwitansi() {
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
   
-  // Year & Database states
+  // URL Params for external triggers
+  const urlMonth = searchParams.get('month');
+  const urlYear = searchParams.get('year');
+  const urlBukti = searchParams.get('bukti');
+  const autoPrint = searchParams.get('autoPrint') === 'true';
+
+  const [hasAutoPrinted, setHasAutoPrinted] = useState(false);
   const [databases, setDatabases] = useState<GeneratedDatabase[]>([]);
   const [loadingDatabases, setLoadingDatabases] = useState(true);
   const [activeYear, setActiveYear] = useState<string>(() => {
@@ -124,11 +132,25 @@ export default function Kwitansi() {
   // Modal print preview setup state
   const [printModalItem, setPrintModalItem] = useState<KwitansiPrintData | null>(null);
 
-  // Final Print layout item (what's rendered inside the print CSS block)
-  const [previewItem, setPreviewItem] = useState<KwitansiPrintData | null>(null);
+  // Final Print layout items (what's rendered inside the print CSS block)
+  const [previewItems, setPreviewItems] = useState<KwitansiPrintData[]>([]);
 
   // Local state to manage editable recipients
   const [penerimaState, setPenerimaState] = useState<{ [key: string]: string }>({});
+
+  useEffect(() => {
+    if (urlYear) {
+      setActiveYear(urlYear);
+      localStorage.setItem('siap_bos_active_year', urlYear);
+    }
+    if (urlMonth) {
+      setActiveMonth(urlMonth);
+      localStorage.setItem('siap_bos_active_month', urlMonth);
+    }
+    if (urlBukti) {
+      setSearchQuery(urlBukti);
+    }
+  }, [urlYear, urlMonth, urlBukti]);
 
   useEffect(() => {
     if (!user?.sekolah) return;
@@ -973,6 +995,17 @@ export default function Kwitansi() {
     return matchBukti || matchTanggal || matchUraian;
   });
 
+  // Auto-trigger print if coming from Cetak menu
+  useEffect(() => {
+    if (autoPrint && !loadingBku && !loadingDatabases && bkuRows.length > 0 && !hasAutoPrinted) {
+      const timer = setTimeout(() => {
+        handlePrintAllFiltered();
+        setHasAutoPrinted(true);
+      }, 1500); // 1.5s delay to ensure filtering is complete
+      return () => clearTimeout(timer);
+    }
+  }, [autoPrint, loadingBku, loadingDatabases, bkuRows, hasAutoPrinted, filteredGroupedKwitansis]);
+
   // Open configuration model before running physical system print
   const openPrintSetup = (group: KwitansiGroup) => {
     const keyPenerima = `siap_bos_penerima_${user?.sekolah || ''}_${group.noBukti}`;
@@ -1080,12 +1113,82 @@ export default function Kwitansi() {
     if (!printModalItem) return;
     
     // Update the layout container that gets printed
-    setPreviewItem(printModalItem);
+    setPreviewItems([printModalItem]);
     
     // Auto-dismiss setup popup
     setPrintModalItem(null);
     
     // Give state machine a tiny window to populate DOM before firing native window print
+    setTimeout(() => {
+      window.print();
+    }, 450);
+  };
+
+  const handlePrintAllFiltered = () => {
+    if (filteredGroupedKwitansis.length === 0) {
+      toast.error('Tidak ada kwitansi yang terfilter untuk dicetak.');
+      return;
+    }
+
+    const itemsToPrint: KwitansiPrintData[] = filteredGroupedKwitansis.map(group => {
+      const keyPenerima = `siap_bos_penerima_${user?.sekolah || ''}_${group.noBukti}`;
+      const savedPenerima = localStorage.getItem(keyPenerima) || penerimaState[group.noBukti] || '';
+      const schoolName = String(user?.sekolah || 'SEKOLAH').toUpperCase();
+      const defaultSudahTerima = `BENDAHARA BOS ${schoolName}`;
+      const joinedKeterangan = group.items.map(it => it.keterangan).join('; ');
+      const firstItem = group.items.find(it => it.kodeRekening && it.kodeRekening.trim().startsWith('5.')) || group.items[0] || { kodeKegiatan: '', kodeRekening: '' };
+      const { kodeKegiatan: resolvedKeg, kodeRekening: resolvedRek, namaKegiatan, namaRekening } = findRkasDescriptions(firstItem.kodeKegiatan, firstItem.kodeRekening);
+
+      const kegiatanList: { kode: string; nama: string }[] = [];
+      const rekeningList: { kode: string; nama: string }[] = [];
+      const seenKegs = new Set<string>();
+      const seenReks = new Set<string>();
+
+      group.items.forEach(it => {
+        const pureRek = String(it.kodeRekening || '').replace(/\s+/g, '').trim();
+        if (pureRek && pureRek.startsWith('5.')) {
+          const pureKeg = String(it.kodeKegiatan || '').replace(/\s+/g, '').trim();
+          if (pureKeg) {
+            const res = findRkasDescriptions(pureKeg, '');
+            const kegKey = String(res.kodeKegiatan || pureKeg).toLowerCase();
+            if (!seenKegs.has(kegKey)) {
+              seenKegs.add(kegKey);
+              kegiatanList.push({ kode: res.kodeKegiatan || pureKeg, nama: res.namaKegiatan });
+            }
+          }
+          const resRek = findRkasDescriptions('', pureRek);
+          const rekKey = String(resRek.kodeRekening || pureRek).toLowerCase();
+          if (!seenReks.has(rekKey)) {
+            seenReks.add(rekKey);
+            rekeningList.push({ kode: resRek.kodeRekening || pureRek, nama: resRek.namaRekening });
+          }
+        }
+      });
+
+      if (kegiatanList.length === 0) kegiatanList.push({ kode: resolvedKeg || '05.08.03', nama: namaKegiatan });
+      if (rekeningList.length === 0) rekeningList.push({ kode: resolvedRek || '5.1.02.03.02.0115', nama: namaRekening });
+
+      return {
+        noKwitansi: group.noBukti,
+        sudahTerimaDari: defaultSudahTerima,
+        terbilang: getTerbilangString(group.totalKredit),
+        jumlahUang: group.totalKredit,
+        untukPembayaran: joinedKeterangan,
+        tanggal: group.tanggal,
+        tempat: schoolInfo.kecamatan || 'Jakarta',
+        penerima: savedPenerima || '..........',
+        mengetahui: schoolInfo.kepsek || '',
+        nipMengetahui: schoolInfo.nipKepsek || '',
+        kodeKegiatan: resolvedKeg || '',
+        kodeRekening: resolvedRek || '',
+        namaKegiatan,
+        namaRekening,
+        kegiatanList,
+        rekeningList
+      };
+    });
+
+    setPreviewItems(itemsToPrint);
     setTimeout(() => {
       window.print();
     }, 450);
@@ -1108,6 +1211,13 @@ export default function Kwitansi() {
 
         {/* Action controls wrapper (Year) */}
         <div className="flex items-center gap-3">
+          <button
+            onClick={handlePrintAllFiltered}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-lg shadow-indigo-600/20 transition-all active:scale-95"
+          >
+            <Printer size={14} />
+            <span>Cetak Semua Terfilter</span>
+          </button>
           <div className="flex items-center gap-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 px-3.5 py-2 rounded-xl text-xs shadow-xs">
             <Database size={14} className="text-indigo-500" />
             <span className="font-extrabold text-gray-700 dark:text-gray-300">Tahun Anggaran:</span>
@@ -1994,9 +2104,11 @@ export default function Kwitansi() {
             </AnimatePresence>
 
           {/* Printable HTML Layout (Visible only inside system browser print renderer) */}
-          {previewItem && (
-            <div id="print-receipt-section" className="hidden print:block bg-white p-12 max-w-4xl mx-auto space-y-6 font-serif leading-relaxed text-black">
-              {/* Paper canvas print layout */}
+          {previewItems.length > 0 && (
+            <div id="print-receipt-section" className="hidden print:block space-y-12 w-full">
+              {previewItems.map((previewItem, idx) => (
+                <div key={idx} className="bg-white p-6 max-w-4xl mx-auto font-serif leading-relaxed text-black w-full" style={{ pageBreakAfter: 'always' }}>
+                  {/* Paper canvas print layout */}
               <div className="bg-white text-black p-6 border border-black shadow-none rounded-none font-sans text-xs space-y-6 w-full">
                 
                 {/* Split header cell block */}
@@ -2141,11 +2253,11 @@ export default function Kwitansi() {
                 <span>Aplikasi Administrasi SIAP BOS 2026.</span>
               </div>
             </div>
-          )}
-
+          ))}
         </div>
       )}
-
+        </div>
+      )}
     </div>
   );
 }

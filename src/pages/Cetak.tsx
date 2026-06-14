@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { 
   Printer, Database, Play, ExternalLink, RefreshCw, FileText, FileCheck, Check, Calendar, ArrowUpRight, Download, Info
@@ -22,6 +23,7 @@ interface GeneratedDatabase {
 
 export default function Cetak() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   
   // Year states
   const [databases, setDatabases] = useState<GeneratedDatabase[]>([]);
@@ -33,6 +35,7 @@ export default function Cetak() {
   // Print Form state
   const [documentType, setDocumentType] = useState<string>('rkas');
   const [activeMonth, setActiveMonth] = useState<string>('Januari');
+  const [targetBukti, setTargetBukti] = useState<string>('');
   const [legacyTahap, setLegacyTahap] = useState<string>('Tahap I (Jan - Jun)');
 
   // Archives
@@ -126,6 +129,14 @@ export default function Cetak() {
   const handleCompileDocument = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user?.sekolah || !activeYear) return;
+
+    if (documentType === 'kwitansi') {
+      // Open in a new tab with autoPrint flag
+      const q = targetBukti ? `&bukti=${encodeURIComponent(targetBukti)}` : '';
+      const url = `/kwitansi?month=${encodeURIComponent(activeMonth)}&year=${activeYear}${q}&autoPrint=true`;
+      window.open(url, '_blank');
+      return;
+    }
 
     setCompiling(true);
     setCompileStep(0);
@@ -251,15 +262,16 @@ export default function Cetak() {
                 >
                   <option value="rkas">RKAS (Rencana Kegiatan Anggaran)</option>
                   <option value="bku">Buku Kas Umum (BKU) Bulanan</option>
+                  <option value="kwitansi">Kwitansi Pengeluaran (Receipts)</option>
                   <option value="Laporan BOS Reguler K7a">Laporan BOS Reguler (K7a)</option>
                   <option value="Laporan Realisasi K7b">Realisasi Penggunaan (K7b)</option>
                   <option value="Surat Tanggung Jawab SPTJM">Surat Pertanggungjawaban Mutlak (SPTJM)</option>
                 </select>
               </div>
 
-              {documentType === 'bku' && (
+              {(documentType === 'bku' || documentType === 'kwitansi') && (
                 <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block">Bulan Transaksi BKU</label>
+                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block">Bulan Transaksi</label>
                   <select
                     value={activeMonth}
                     onChange={(e) => setActiveMonth(e.target.value)}
@@ -269,6 +281,20 @@ export default function Cetak() {
                       <option key={m} value={m}>{m}</option>
                     ))}
                   </select>
+                </div>
+              )}
+
+              {documentType === 'kwitansi' && (
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest block">Spesifik No. Bukti (Opsional)</label>
+                  <input
+                    type="text"
+                    value={targetBukti}
+                    onChange={(e) => setTargetBukti(e.target.value)}
+                    placeholder="Contoh: KK-01 (Kosongkan utk Cetak Semua)"
+                    className="w-full p-2.5 bg-gray-50 border border-gray-200 dark:bg-gray-900 dark:border-gray-700 rounded-xl focus:ring-1 focus:ring-indigo-500 outline-none font-bold text-gray-800 dark:text-gray-200"
+                  />
+                  <p className="text-[9px] text-gray-400 italic">Isi Nomor Bukti jika hanya ingin mencetak satu item kwitansi saja.</p>
                 </div>
               )}
 
@@ -293,7 +319,7 @@ export default function Cetak() {
                 className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-indigo-550 to-indigo-650 bg-indigo-600 hover:bg-indigo-700 text-white font-bold p-3 rounded-xl transition shadow-lg shadow-indigo-600/10 cursor-pointer disabled:opacity-50"
               >
                 <Printer size={15} />
-                <span>Render Cetak PDF ({activeYear})</span>
+                <span>{documentType === 'kwitansi' ? 'Buka Interface Cetak Kwitansi' : `Render Cetak PDF (${activeYear})`}</span>
               </button>
 
             </form>
