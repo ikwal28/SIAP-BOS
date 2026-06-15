@@ -27,7 +27,14 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { user } = useAuth();
-  return user ? children : <Navigate to="/" />;
+  const isPrinting = new URLSearchParams(window.location.search).get('autoPrint') === 'true';
+  const isViewAll = new URLSearchParams(window.location.search).get('viewAll') === 'true';
+  const localUser = localStorage.getItem('user');
+
+  if (user || ((isPrinting || isViewAll) && localUser)) {
+    return children;
+  }
+  return <Navigate to="/" />;
 };
 
 export default function App() {

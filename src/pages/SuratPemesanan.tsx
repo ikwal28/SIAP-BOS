@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { cleanGoogleSheetsDateToCode } from './Rkas';
 import { 
@@ -183,6 +184,25 @@ export default function SuratPemesanan() {
   const [printItem, setPrintItem] = useState<SuratPemesananData | null>(null);
   const [showFormModal, setShowFormModal] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const printId = searchParams.get('id');
+  const autoPrint = searchParams.get('autoPrint') === 'true';
+
+  useEffect(() => {
+    if (printId && orders.length > 0) {
+      const match = orders.find(o => o.id === printId);
+      if (match) {
+        setPrintItem(match);
+        if (autoPrint) {
+          setTimeout(() => {
+            window.print();
+          }, 800);
+        }
+      }
+    }
+  }, [printId, autoPrint, orders]);
 
 
   // Form states
@@ -953,10 +973,201 @@ export default function SuratPemesanan() {
   };
 
   const triggerPrint = (order: SuratPemesananData) => {
-    setPrintItem(order);
-    setTimeout(() => {
-      window.print();
-    }, 500);
+    if (!order) return;
+    
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      toast.error('Gagal membuka jendela cetak. Pastikan izin popup browser diaktifkan.');
+      return;
+    }
+
+    const itemsHtml = order.items.map((item, idx) => `
+      <tr class="border-b border-black">
+        <td class="border border-black py-1 text-center text-[11px]">${idx + 1}</td>
+        <td class="border border-black py-1 px-2.5 text-[11px] text-justify font-bold">${item.namaBarang}</td>
+        <td class="border border-black py-1 text-center font-bold text-[11px]">${item.volume}</td>
+        <td class="border border-black py-1 text-center uppercase text-[11px]">${item.satuan}</td>
+        <td class="border border-black py-1 px-2.5 text-right text-[11px]">
+          <div class="flex justify-between w-full font-mono">
+            <span>RP</span>
+            <span>${item.hargaSatuan.toLocaleString('id-ID')}</span>
+          </div>
+        </td>
+        <td class="border border-black py-1 px-2.5 text-right font-black text-[11px]">
+          <div class="flex justify-between w-full font-mono">
+            <span>RP</span>
+            <span>${(item.volume * item.hargaSatuan).toLocaleString('id-ID')}</span>
+          </div>
+        </td>
+      </tr>
+    `).join('');
+
+    const totalKredit = order.items.reduce((acc, it) => acc + (it.volume * it.hargaSatuan), 0);
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Surat Pemesanan - ${order.nomorSp}</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <style>
+          @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+          body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background-color: #f7f9fa;
+            margin: 0;
+            padding: 20px;
+          }
+          @media print {
+            @page {
+              size: A4 portrait;
+              margin: 8mm 10mm 8mm 10mm;
+            }
+            body {
+              background: white !important;
+              padding: 0 !important;
+              margin: 0 !important;
+              -webkit-print-color-adjust: exact;
+            }
+            .no-print {
+              display: none !important;
+            }
+            .a4-page {
+              width: 100% !important;
+              max-width: 100% !important;
+              padding: 0 !important;
+              margin: 0 !important;
+              box-shadow: none !important;
+              border: none !important;
+              box-sizing: border-box !important;
+              background: white !important;
+            }
+          }
+          .a4-page {
+            background: white;
+            width: 210mm;
+            padding: 12mm 10mm !important;
+            margin: 0 auto;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+            border-radius: 8px;
+            box-sizing: border-box;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="no-print max-w-[210mm] mx-auto mb-6 flex justify-between items-center bg-gray-100 p-4 rounded-2xl border border-gray-250">
+          <div>
+            <div class="text-sm font-bold text-gray-800">Pratinjau Surat Pemesanan (A4 Portrait)</div>
+            <div class="text-xs text-gray-500">Nomor SP: ${order.nomorSp}</div>
+          </div>
+          <button onclick="window.print()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl cursor-pointer">
+            Cetak Surat Pemesanan
+          </button>
+        </div>
+
+        <div class="a4-page text-black leading-snug text-[11.5px]">
+          <!-- Centered Title -->
+          <div class="text-center mb-5">
+            <h1 class="text-[14px] font-bold tracking-wide uppercase">SURAT PEMESANAN BARANG</h1>
+          </div>
+
+          <!-- Metadata table following exactly the design image -->
+          <div class="mb-4 text-left text-black">
+            <table class="w-full text-[11.5px] text-black border-none border-collapse text-left">
+              <tbody>
+                <tr class="border-none">
+                  <td class="w-24 font-normal py-0.5 px-0 valign-top align-top whitespace-nowrap border-none text-black">Nomor</td>
+                  <td class="w-4 py-0.5 px-0 valign-top align-top text-center border-none text-black">:</td>
+                  <td class="py-0.5 px-0 valign-top align-top border-none text-black font-semibold">${order.nomorSp || '……………………………………'}</td>
+                </tr>
+                <tr class="border-none">
+                  <td class="font-normal py-0.5 px-0 valign-top align-top whitespace-nowrap border-none text-black">Pemesan</td>
+                  <td class="py-0.5 px-0 valign-top align-top text-center border-none text-black">:</td>
+                  <td class="py-0.5 px-0 border-none text-black">
+                    <div class="font-normal">${user?.sekolah || 'SD Negeri 2 Laot Tadu'}</div>
+                    <div class="pl-4 mt-0.5 space-y-0.5 text-black">
+                      <p>1. ${order.kepsek || 'Budiyanto, S.Pd'} (Kepala Sekolah)</p>
+                      <p>2. ${order.bendahara || 'Nana Rosdiana, S.Pd'} (Bendahara Sekolah)</p>
+                    </div>
+                  </td>
+                </tr>
+                <tr class="border-none">
+                  <td class="font-normal py-0.5 px-0 valign-top align-top whitespace-nowrap border-none text-black">Penyedia</td>
+                  <td class="py-0.5 px-0 valign-top align-top text-center border-none text-black">:</td>
+                  <td class="py-0.5 px-0 valign-top align-top border-none text-black">${order.namaPenyedia || 'Toko Hafifi 2'}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Underlined selection label -->
+          <p class="mt-4 mb-2 text-[11.5px] font-normal underline text-black">Dengan ini memesan barang sebagai berikut :</p>
+
+          <!-- Table -->
+          <table class="w-full border-collapse border border-black text-[11.5px] mb-4">
+            <thead>
+              <tr class="font-bold border-b border-black text-black bg-gray-50/50">
+                <th class="border border-black py-1 px-1 text-center w-10">NO</th>
+                <th class="border border-black py-1 px-2.5 text-left">NAMA BARANG</th>
+                <th class="border border-black py-1 px-2 text-center w-16">VOLUME</th>
+                <th class="border border-black py-1 px-2 text-center w-20">SATUAN</th>
+                <th class="border border-black py-1 px-2.5 text-right w-32">HARGA SATUAN</th>
+                <th class="border border-black py-1 px-2.5 text-right w-32">JUMLAH</th>
+              </tr>
+            </thead>
+            <tbody class="text-black">
+              ${itemsHtml}
+              <tr class="font-bold">
+                <td colSpan="5" class="border border-black py-1 px-2.5 text-center uppercase text-black">TOTAL</td>
+                <td class="border border-black py-1 px-2.5 text-right text-black font-black">
+                  <div class="flex justify-between w-full font-mono">
+                    <span>RP</span>
+                    <span class="underline">${totalKredit.toLocaleString('id-ID')}</span>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <!-- Body paragraph text strictly following formatting -->
+          <p class="mb-2 text-[11.5px] text-justify leading-relaxed text-black font-normal">
+            Kami berharap barang yang dipesan agar segera diproses dan dikirimkan kesekolah pada tanggal <strong class="font-bold">${order.tanggalKirim || '4 Februari 2025'}</strong>. Pembayaran akan dilakukan setelah barang diterima dalam keadaan baik dan sesuai pemesanan.
+          </p>
+
+          <p class="mb-4 text-[11.5px] text-justify leading-relaxed text-black font-normal">
+            Demikian surat pemesanan barang ini kami buat. Atas perhatian dan kerjasamanya kami ucapkan terima kasih.
+          </p>
+
+          <!-- Signatures on the right side - Kepala Sekolah only -->
+          <div class="mt-6 flex justify-end text-[11.5px] text-black font-normal">
+            <div class="w-72 space-y-12 text-left">
+              <div>
+                <p>${order.kabupatenCetak || 'Nagan Raya'}, ${order.tanggalSurat || '3 Februari 2025'}</p>
+                <p>Hormat kami,</p>
+                <p>Kepala ${user?.sekolah || 'SD Negeri 2 Laot Tadu'}</p>
+              </div>
+              <div class="space-y-0.5">
+                <p class="font-bold underline">${order.kepsek || 'Budiyanto, S.Pd'}</p>
+                ${(order.nipKepsek && order.nipKepsek.trim() !== '') ? `<p>NIP. ${order.nipKepsek}</p>` : ''}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <script>
+          window.onload = function() {
+            setTimeout(function() {
+              window.print();
+            }, 600);
+          };
+        </script>
+      </body>
+      </html>
+    `;
+
+    printWindow.document.open();
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
   };
 
   const filteredOrders = orders.filter(o => {
@@ -994,6 +1205,35 @@ export default function SuratPemesanan() {
 
   return (
     <div className="space-y-6">
+      {autoPrint && (
+        <div className="print:hidden bg-indigo-50/90 dark:bg-gray-900 border border-indigo-100 dark:border-gray-800 rounded-3xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 max-w-6xl mx-auto mb-6 backdrop-blur-md shadow-md animate-fade-in">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-indigo-600 text-white rounded-xl">
+              <Printer size={18} />
+            </div>
+            <div>
+              <h3 className="text-sm font-black text-gray-900 dark:text-white uppercase tracking-tight font-sans">Pratinjau Cetak Surat Pemesanan PDF</h3>
+              <p className="text-xs text-gray-450 font-medium font-sans">Sistem secara otomatis memicu dialog cetak. Gunakan tombol berikut untuk melakukan cetak ulang atau kembali.</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => window.print()}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-xs"
+            >
+              <Printer size={13} />
+              Cetak Ulang
+            </button>
+            <button
+              onClick={() => navigate('/cetak')}
+              className="px-4 py-2 bg-white hover:bg-gray-50 text-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-750 border border-gray-250 dark:border-gray-700 text-xs font-black rounded-xl transition cursor-pointer flex items-center gap-1.5"
+            >
+              ← Kembali ke Menu Cetak
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header and Filter */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-gray-200 dark:border-gray-800 print:hidden">
         <div>

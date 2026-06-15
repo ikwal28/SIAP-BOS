@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { 
   Receipt, Plus, Trash2, Edit2, Printer, Search, Calendar, User, MapPin, Store, HelpCircle, Save, X, ArrowLeft
@@ -57,6 +58,25 @@ export default function Nota() {
   const [searchQuery, setSearchQuery] = useState('');
   const [editingNota, setEditingNota] = useState<NotaData | null>(null);
   const [printItem, setPrintItem] = useState<NotaData | null>(null);
+
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const printId = searchParams.get('id');
+  const autoPrint = searchParams.get('autoPrint') === 'true';
+
+  useEffect(() => {
+    if (printId && notas.length > 0) {
+      const match = notas.find(n => n.id === printId);
+      if (match) {
+        setPrintItem(match);
+        if (autoPrint) {
+          setTimeout(() => {
+            window.print();
+          }, 800);
+        }
+      }
+    }
+  }, [printId, autoPrint, notas]);
   const [showFormModal, setShowFormModal] = useState(false);
 
   // Form states
@@ -234,6 +254,34 @@ export default function Nota() {
 
   return (
     <div className="space-y-6">
+      {autoPrint && (
+        <div className="print:hidden bg-indigo-50/90 dark:bg-gray-900 border border-indigo-100 dark:border-gray-800 rounded-3xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 max-w-6xl mx-auto mb-6 backdrop-blur-md shadow-md animate-fade-in">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-indigo-600 text-white rounded-xl">
+              <Printer size={18} />
+            </div>
+            <div>
+              <h3 className="text-sm font-black text-gray-900 dark:text-white uppercase tracking-tight font-sans">Pratinjau Cetak Nota Belanja PDF</h3>
+              <p className="text-xs text-gray-450 font-medium font-sans">Sistem secara otomatis memicu dialog cetak. Gunakan tombol berikut untuk melakukan cetak ulang atau kembali.</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => window.print()}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-xs"
+            >
+              <Printer size={13} />
+              Cetak Ulang
+            </button>
+            <button
+              onClick={() => navigate('/cetak')}
+              className="px-4 py-2 bg-white hover:bg-gray-50 text-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-750 border border-gray-250 dark:border-gray-700 text-xs font-black rounded-xl transition cursor-pointer flex items-center gap-1.5"
+            >
+              ← Kembali ke Menu Cetak
+            </button>
+          </div>
+        </div>
+      )}
       {/* Header and Filter */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-gray-200 dark:border-gray-800 print:hidden">
         <div>
