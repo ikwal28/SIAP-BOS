@@ -24,6 +24,7 @@ import Honorarium from './pages/Honorarium';
 import NotFound from './pages/NotFound';
 import AppLayout from './layouts/AppLayout';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import PwaSplashScreen from './components/PwaSplashScreen';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { user } = useAuth();
@@ -38,31 +39,39 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
 };
 
 export default function App() {
+  const [showSplash, setShowSplash] = React.useState(true);
+
   return (
     <AuthProvider>
-      <Toaster richColors position="top-center" />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Login />} />
-          <Route element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/sekolah" element={<DataSekolah />} />
-            <Route path="/sekolah/tambah" element={<TambahSekolah />} />
-            <Route path="/sekolah/edit" element={<EditSekolah />} />
-            <Route path="/rkas" element={<Rkas />} />
-            <Route path="/bku" element={<Bku />} />
-            <Route path="/kwitansi" element={<Kwitansi />} />
-            <Route path="/cetak" element={<Cetak />} />
-            <Route path="/sp" element={<SuratPemesanan />} />
-            <Route path="/nota" element={<Nota />} />
-            <Route path="/bast" element={<BeritaAcara />} />
-            <Route path="/spd" element={<PerjalananDinas />} />
-            <Route path="/honor" element={<Honorarium />} />
-            <Route path="/settings" element={<Settings />} />
-          </Route>
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </BrowserRouter>
+      {showSplash ? (
+        <PwaSplashScreen onComplete={() => setShowSplash(false)} />
+      ) : (
+        <>
+          <Toaster richColors position="top-center" />
+          <BrowserRouter>
+            <Routes>
+              <Route path="/" element={<Login />} />
+              <Route element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/sekolah" element={<DataSekolah />} />
+                <Route path="/sekolah/tambah" element={<TambahSekolah />} />
+                <Route path="/sekolah/edit" element={<EditSekolah />} />
+                <Route path="/rkas" element={<Rkas />} />
+                <Route path="/bku" element={<Bku />} />
+                <Route path="/kwitansi" element={<Kwitansi />} />
+                <Route path="/cetak" element={<Cetak />} />
+                <Route path="/sp" element={<SuratPemesanan />} />
+                <Route path="/nota" element={<Nota />} />
+                <Route path="/bast" element={<BeritaAcara />} />
+                <Route path="/spd" element={<PerjalananDinas />} />
+                <Route path="/honor" element={<Honorarium />} />
+                <Route path="/settings" element={<Settings />} />
+              </Route>
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </BrowserRouter>
+        </>
+      )}
     </AuthProvider>
   );
 }

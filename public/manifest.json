@@ -1,0 +1,25 @@
+{
+  "name": "SIAP BOS - Sistem Aplikasi Pengelolaan BOS",
+  "short_name": "SIAP BOS",
+  "description": "Sistem Aplikasi Pengelolaan BOS oleh Ikwal Presetiawan, S.T",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#090d16",
+  "theme_color": "#6366f1",
+  "categories": ["education", "finance", "productivity"],
+  "icons": [
+    {
+      "src": "/logo_siap_bos.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/logo_siap_bos_maskable.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
