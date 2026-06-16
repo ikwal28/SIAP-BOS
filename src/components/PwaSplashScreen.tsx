@@ -167,10 +167,10 @@ export default function PwaSplashScreen({ onComplete }: PwaSplashScreenProps) {
           >
             <div className="flex items-center gap-1.5 mb-2">
               <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="text-[9.5px] uppercase tracking-widest text-slate-500 font-bold">Aplikasi Resmi BOS v1.0.0</span>
+              <span className="text-[9.5px] uppercase tracking-widest text-slate-500 font-bold">Ditenagai Enggine SIAP BOS Versi 1.0.0</span>
             </div>
             <div className="px-5 py-2.5 bg-slate-950/60 border border-slate-800/80 backdrop-blur-md rounded-2xl flex flex-col items-center">
-              <span className="text-[10px] text-gray-500 font-medium tracking-wide">Direkayasa oleh:</span>
+              <span className="text-[10px] text-gray-500 font-medium tracking-wide">Dibuat Oleh:</span>
               <span className="text-xs font-black tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-amber-200 via-yellow-100 to-orange-200 mt-0.5">
                 Ikwal Presetiawan, S.T
               </span>
