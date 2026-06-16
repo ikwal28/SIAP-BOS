@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { LogIn, User, Lock, Loader2 } from 'lucide-react';
+import { LogIn, User, Lock, Loader2, Download, ShieldCheck } from 'lucide-react';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -13,12 +13,60 @@ export default function Login() {
   const [loadingDemo, setLoadingDemo] = useState(false);
   const { login, user } = useAuth();
   const navigate = useNavigate();
+  
+  // PWA state Hooks
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showInstallBtn, setShowInstallBtn] = useState(true);
 
   useEffect(() => {
     if (user) {
       navigate('/dashboard');
     }
   }, [user, navigate]);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShowInstallBtn(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    // Detect if already launched as PWA standalone
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      setShowInstallBtn(false);
+    }
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  const handleInstallPwa = async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === 'accepted') {
+        toast.success('Terima kasih! SIAP BOS sedang dipasang ke perangkat Anda.');
+        setShowInstallBtn(false);
+      }
+      setDeferredPrompt(null);
+    } else {
+      // Polished guide for other platform browsers (Safari iOS, non-supported, etc.)
+      toast.info(
+        <div className="flex flex-col gap-2 p-1 text-slate-800">
+          <p className="font-extrabold text-sm text-indigo-700">CARA INSTAL MANUAL PWA SIAP BOS:</p>
+          <ul className="text-xs list-disc list-inside space-y-1 text-slate-600">
+            <li><span className="font-bold text-slate-700">Android (Chrome):</span> Ketuk <span className="font-extrabold">titik tiga</span> di pojok kanan atas lalu pilih <span className="font-extrabold text-indigo-650">"Tambahkan ke Layar Utama"</span> atau <span className="font-semibold">"Instal Aplikasi"</span>.</li>
+            <li><span className="font-bold text-slate-700">iPhone / iPad (Safari):</span> Ketuk ikon <span className="font-extrabold">Bagikan / Share</span> (panah ke atas) lalu pilih <span className="font-extrabold text-indigo-650">"Tambahkan ke Layar Utama" (Add to Home Screen)</span>.</li>
+            <li><span className="font-bold text-slate-700">Komputer / Desktop:</span> Klik ikon <span className="font-extrabold">Instal</span> (layar kecil bertanda panah bawah) di bilah alamat/address bar browser Anda.</li>
+          </ul>
+        </div>,
+        { duration: 10000, position: 'top-center' }
+      );
+    }
+  };
 
   const handleDemoLogin = async () => {
     setLoadingDemo(true);
@@ -222,6 +270,24 @@ export default function Login() {
               DAFTAR
             </button>
           </div>
+
+          {showInstallBtn && (
+            <motion.div 
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 }}
+              className="pt-2"
+            >
+              <button
+                type="button"
+                onClick={handleInstallPwa}
+                className="w-full py-3 mt-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black text-xs tracking-wider rounded-xl transition cursor-pointer text-center flex items-center justify-center gap-2 shadow-md shadow-emerald-950/40 animate-pulse hover:animate-none"
+              >
+                <Download size={15} className="font-bold animate-bounce" />
+                Instal Aplikasi SIAP BOS (Khusus PC/LAPTOP)
+              </button>
+            </motion.div>
+          )}
         </div>
       </motion.div>
     </div>
