@@ -18,7 +18,7 @@ export default function PwaSplashScreen({ onComplete }: PwaSplashScreenProps) {
       { prg: 55, txt: 'Memeriksa integrasi database RKAS & BKU...', delay: 3500 },
       { prg: 75, txt: 'Sinkronisasi lembar draf belanja sekolah...', delay: 4800 },
       { prg: 90, txt: 'Otentikasi kredensial pengguna terenkripsi...', delay: 5800 },
-      { prg: 100, txt: 'Sistem Pengelolaan SIAP BOS Siap!', delay: 6400 }
+      { prg: 100, txt: 'Sistem Administrasi SIAP BOS Siap!', delay: 6400 }
     ];
 
     const timers: NodeJS.Timeout[] = [];
@@ -114,8 +114,7 @@ export default function PwaSplashScreen({ onComplete }: PwaSplashScreenProps) {
 
             {/* Application Title with Custom Tracking & Premium Gradient */}
             <motion.h1
-              className="text-4xl font-extrabold tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-white via-indigo-200 to-purple-300 font-sans mb-1"
-              style={{ filter: 'drop-shadow(0 2px 10px rgba(99, 102, 241, 0.3))' }}
+              className="text-5xl sm:text-6xl md:text-7xl font-black tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-white via-indigo-100 to-purple-200 font-sans mb-3 drop-shadow-[0_4px_16px_rgba(99,102,241,0.5)]"
               initial={{ y: 20, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               transition={{ delay: 0.3, duration: 0.5 }}
@@ -125,12 +124,12 @@ export default function PwaSplashScreen({ onComplete }: PwaSplashScreenProps) {
 
             {/* Slogan */}
             <motion.p
-              className="text-xs text-indigo-300 tracking-wider uppercase font-medium max-w-[280px]"
+              className="text-[9px] sm:text-[11px] md:text-sm text-indigo-200 tracking-[0.2em] sm:tracking-[0.25em] uppercase font-black whitespace-nowrap max-w-none mb-2 drop-shadow-[0_2px_4px_rgba(0,0,0,0.6)]"
               initial={{ y: 15, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               transition={{ delay: 0.4, duration: 0.5 }}
             >
-              Sistem Aplikasi Pengelolaan BOS
+              Sistem Administrasi Pengelolaan BOS
             </motion.p>
 
             {/* Sophisticated Linear Progress Bar */}
@@ -169,10 +168,10 @@ export default function PwaSplashScreen({ onComplete }: PwaSplashScreenProps) {
               <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
               <span className="text-[9.5px] uppercase tracking-widest text-slate-500 font-bold">Ditenagai Enggine SIAP BOS Versi 1.0.0</span>
             </div>
-            <div className="px-5 py-2.5 bg-slate-950/60 border border-slate-800/80 backdrop-blur-md rounded-2xl flex flex-col items-center">
-              <span className="text-[10px] text-gray-500 font-medium tracking-wide">Dibuat Oleh:</span>
-              <span className="text-xs font-black tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-amber-200 via-yellow-100 to-orange-200 mt-0.5">
-                Ikwal Presetiawan, S.T
+            <div className="px-8 py-4 bg-slate-950 border border-indigo-500/30 backdrop-blur-md rounded-3xl flex flex-col items-center shadow-xl shadow-black/80">
+              <span className="text-xs text-indigo-300 font-extrabold tracking-widest uppercase mb-1 drop-shadow">Dibuat Oleh:</span>
+              <span className="text-xl sm:text-2xl font-black tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 via-amber-200 to-yellow-400 mt-1 text-center drop-shadow-[0_2px_8px_rgba(234,179,8,0.4)]">
+                IKWAL PRESETIAWAN, S.T
               </span>
             </div>
           </motion.div>
